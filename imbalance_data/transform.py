@@ -149,6 +149,17 @@ def get_transform(dataset, aug=None):
                 Cutout(p=0.75, scale=(0.02, 0.4), ratio=(0.4, 1 / 0.4), value=(0, 255), pixel_level=False),
                 transforms.ToTensor(),
                 transforms.Normalize(mean, std), ])
+        elif aug == 'comp':
+            transform_train = transforms.Compose([
+                transforms.RandomResizedCrop(size=32, scale=(0.2, 1.)),
+                transforms.RandomHorizontalFlip(),
+                transforms.RandomApply([
+                    transforms.ColorJitter(0.4, 0.4, 0.4, 0.1)
+                ], p=0.8),
+                transforms.RandomGrayscale(p=0.2),
+                transforms.ToTensor(),
+                transforms.Normalize(mean, std)
+            ])
 
         transform_val = transforms.Compose([transforms.ToTensor(),transforms.Normalize(mean, std)])
         return transform_train, transform_val
