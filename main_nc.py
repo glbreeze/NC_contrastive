@@ -45,7 +45,7 @@ def main(args):
                name= args.store_name.split('/')[-1]
                )
     wandb.config.update(args)
-    main_worker(args.gpu, wandb.config)
+    main_worker(wandb.config)
 
 
 def main_worker(args):
@@ -135,6 +135,7 @@ if __name__ == '__main__':
     parser.add_argument('-p', '--print_freq', default=1000, type=int, metavar='N', help='print frequency (default: 100)')
     parser.add_argument('-j', '--workers', default=4, type=int, metavar='N', help='number of data loading workers (default: 4)')
     parser.add_argument('--start-epoch', default=0, type=int, metavar='N', help='manual epoch number (useful on restarts)')
+    parser.add_argument('--root_model', type=str, default='./result/')
     parser.add_argument('--store_name', type=str, default='name')
     parser.add_argument('--debug', type=int, default=10)
     args = parser.parse_args()

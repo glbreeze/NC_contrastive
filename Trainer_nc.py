@@ -109,7 +109,7 @@ class Trainer(object):
         # tell wandb to watch what the model gets up to: gradients, weights, and more!
         wandb.watch(self.model, self.criterion, log="all", log_freq=20)
 
-        for epoch in range(self.start_epoch, self.epochs):
+        for epoch in range(self.args.epochs):
             if self.args.loss == 'ce':
                 losses = self.train_one_epoch()
             elif self.args.loss in ['scon', 'simc']:
@@ -167,10 +167,10 @@ class Trainer(object):
 
     def set_classifier(self):
         if self.args.cls_type in ['ncc']:
-            cfeats = self.get_knncentroids()
+            cfeats = self.get_ncc_centroids()
             self.classifier = NCC_Classifier(feat_dim=self.model.encoder.feat_dim, num_classes=self.args.num_classes,
-                                             feat_type='cl2nb', dist_type='l2')
-            self.knn_classifier.update(cfeats)
+                                             feat_type='cl2n', dist_type='l2')
+            self.classifier.update(cfeats)
         elif self.args.cls_type in ['linear']:
             self.classifier = LinearClassifier(feat_dim=self.model.encoder.feat_dim, num_classes=self.args.num_classes)
             self.update_linear_classifier()
@@ -188,7 +188,7 @@ class Trainer(object):
 
                 if self.args.loss in ['ce']:
                     output = self.model(input, ret='o')
-                elif self.args.loss in ['scon', 'simc'] and self.cls_type == 'ncc':
+                elif self.args.loss in ['scon', 'simc'] and self.args.cls_type == 'ncc':
                     output = self.classifier(self.model.encoder(input))
                 _, pred = torch.max(output, 1)
 
@@ -253,10 +253,7 @@ class Trainer(object):
                     labels = torch.cat((labels, labels), dim=0)
                 inputs, labels = inputs.to(self.device), labels.to(self.device)
 
-                if self.args.loss in ['ce']:
-                    _, feats = self.model(inputs, ret='of')
-                elif self.loss in ['scon', 'simc']:
-                    feats = self.model(inputs)
+                feats = self.model.encoder(inputs)
                 feats_all.append(feats.cpu().numpy())
                 labels_all.append(labels.cpu().numpy())
 
