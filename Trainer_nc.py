@@ -176,10 +176,9 @@ class Trainer(object):
             self.update_linear_classifier()
 
     def validate(self, epoch=None):
-        # switch to evaluate mode
+        torch.cuda.empty_cache()
         self.model.eval()
-        all_preds = []
-        all_targets = []
+        all_preds, all_targets, all_feats = [], [], []
 
         with torch.no_grad():
             for i, (input, target) in enumerate(self.val_loader):
@@ -241,24 +240,8 @@ class Trainer(object):
 
     def get_ncc_centroids(self):
         # print('===> Calculating centroids.')
-        torch.cuda.empty_cache()
-        self.model.eval()
-        feats_all, labels_all = [], []
-
-        # Calculate initial centroids only on training data.
-        with torch.set_grad_enabled(False):
-            for i, (inputs, labels) in enumerate(self.train_loader):
-                if isinstance(inputs, list):
-                    inputs = torch.cat(inputs, dim=0)
-                    labels = torch.cat((labels, labels), dim=0)
-                inputs, labels = inputs.to(self.device), labels.to(self.device)
-
-                feats = self.model.encoder(inputs)
-                feats_all.append(feats.cpu().numpy())
-                labels_all.append(labels.cpu().numpy())
-
-        feats = np.concatenate(feats_all)
-        labels = np.concatenate(labels_all)
+        feats, labels = self.extract_feat(self.train_loader)
+        feats, labels = feats.cpu().numpy(), labels.cpu().numpy()
         featmean = feats.mean(axis=0)
 
         # Get unnormalized centorids
@@ -282,3 +265,21 @@ class Trainer(object):
                 'l2ncs': l2n_centers,
                 'cl2ncs': cl2n_centers,
                 }
+        
+    def extract_feat(self, data_loader):
+        torch.cuda.empty_cache()
+        self.model.eval() 
+        feats_all, labels_all = [], []
+        with torch.set_grad_enabled(False):
+            for i, (inputs, labels) in enumerate(data_loader):
+                if isinstance(inputs, list):
+                    inputs = torch.cat(inputs, dim=0)
+                    labels = torch.cat((labels, labels), dim=0)
+                inputs, labels = inputs.to(self.device), labels.to(self.device)
+
+                feats = self.model.encoder(inputs)
+                feats_all.append(feats.cpu().numpy())
+                labels_all.append(labels.cpu().numpy())
+            feats = torch.cat(feats_all, dim=0)
+            labels = torch.cat(labels_all, dim=0)
+        return feats, labels
