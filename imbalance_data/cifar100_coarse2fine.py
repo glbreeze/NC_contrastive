@@ -114,19 +114,15 @@ mapping_coarse_fine = {
     'household furniture': ['bed', 'chair', 'couch', 'table', 'wardrobe'],
     'insects': ['bee', 'beetle', 'butterfly', 'caterpillar', 'cockroach'],
     'large carnivores': ['bear', 'leopard', 'lion', 'tiger', 'wolf'],
-    'large man-made outdoor things': ['bridge', 'castle', 'house', 'road',
-                                      'skyscraper'],
-    'large natural outdoor scenes': ['cloud', 'forest', 'mountain', 'plain',
-                                     'sea'],
-    'large omnivores and herbivores': ['camel', 'cattle', 'chimpanzee',
-                                       'elephant', 'kangaroo'],
+    'large man-made outdoor things': ['bridge', 'castle', 'house', 'road', 'skyscraper'],
+    'large natural outdoor scenes': ['cloud', 'forest', 'mountain', 'plain', 'sea'],
+    'large omnivores and herbivores': ['camel', 'cattle', 'chimpanzee', 'elephant', 'kangaroo'],
     'medium-sized mammals': ['fox', 'porcupine', 'possum', 'raccoon', 'skunk'],
     'non-insect invertebrates': ['crab', 'lobster', 'snail', 'spider', 'worm'],
     'people': ['baby', 'boy', 'girl', 'man', 'woman'],
     'reptiles': ['crocodile', 'dinosaur', 'lizard', 'snake', 'turtle'],
     'small mammals': ['hamster', 'mouse', 'rabbit', 'shrew', 'squirrel'],
-    'trees': ['maple_tree', 'oak_tree', 'palm_tree', 'pine_tree',
-              'willow_tree'],
+    'trees': ['maple_tree', 'oak_tree', 'palm_tree', 'pine_tree', 'willow_tree'],
     'vehicles 1': ['bicycle', 'bus', 'motorcycle', 'pickup_truck', 'train'],
     'vehicles 2': ['lawn_mower', 'rocket', 'streetcar', 'tank', 'tractor'],
 }
@@ -154,16 +150,18 @@ def new_dicts():
     fine_coarse = dict()
     # id of fine label -> id of coarse label
     fine_id_coarse_id = dict()
+    fine_id_sub_id = dict()
     # id of coarse label -> id of fine label
     coarse_id_fine_id = dict()
     for id, (coarse, fines) in enumerate(mapping_coarse_fine.items()):
         coarse_id[coarse] = id
         id_coarse[id] = coarse
         fine_labels_ids = []
-        for fine in fines:
+        for sub_id, fine in enumerate(fines):
             fine_coarse[fine] = coarse
             fine_label_id = fine_id[fine]
             fine_id_coarse_id[fine_label_id] = id
+            fine_id_sub_id[fine_label_id] = sub_id
             fine_labels_ids.append(fine_label_id)
         coarse_id_fine_id[id] = fine_labels_ids
 
@@ -173,6 +171,8 @@ def new_dicts():
         dic_value = locals()[dic]
         print(dic + ' = ')
         pp.pprint(dic_value)
+
+    return coarse_id, id_coarse, fine_id_coarse_id, fine_id_sub_id
 
 
 coarse_id_fine_id = {0: [4, 30, 55, 72, 95], 1: [1, 32, 67, 73, 91],
@@ -195,7 +195,23 @@ fine_id_coarse_id = {4: 0, 30: 0, 55: 0, 72: 0, 95: 0, 1: 1, 32: 1, 67: 1, 73: 1
                      93: 15, 36: 16, 50: 16, 65: 16, 74: 16, 80: 16, 47: 17, 52: 17, 56: 17, 59: 17, 96: 17, 8: 18,
                      13: 18, 48: 18, 58: 18, 90: 18, 41: 19, 69: 19, 81: 19, 85: 19, 89: 19}
 
+fine_id_sub_id = {4: 0, 30: 1, 55: 2, 72: 3, 95: 4, 1: 0, 32: 1, 67: 2, 73: 3, 91: 4, 54: 0, 62: 1, 70: 2, 82: 3,
+                  92: 4, 9: 0, 10: 1, 16: 2, 28: 3, 61: 4, 0: 0, 51: 1, 53: 2, 57: 3, 83: 4, 22: 0, 39: 1, 40: 2,
+                  86: 3, 87: 4, 5: 0, 20: 1, 25: 2, 84: 3, 94: 4, 6: 0, 7: 1, 14: 2, 18: 3, 24: 4, 3: 0, 42: 1,
+                  43: 2, 88: 3, 97: 4, 12: 0, 17: 1, 37: 2, 68: 3, 76: 4, 23: 0, 33: 1, 49: 2, 60: 3, 71: 4,
+                  15: 0, 19: 1, 21: 2, 31: 3, 38: 4, 34: 0, 63: 1, 64: 2, 66: 3, 75: 4, 26: 0, 45: 1,
+                  77: 2, 79: 3, 99: 4, 2: 0, 11: 1, 35: 2, 46: 3, 98: 4, 27: 0, 29: 1, 44: 2, 78: 3,
+                  93: 4, 36: 0, 50: 1, 65: 2, 74: 3, 80: 4, 47: 0, 52: 1, 56: 2, 59: 3, 96: 4, 8: 0,
+                  13: 1, 48: 2, 58: 3, 90: 4, 41: 0, 69: 1, 81: 2, 85: 3, 89: 4}
+
+
 if __name__ == "__main__":
     print_fine_labels()
     pp.pprint(mapping_coarse_fine)
-    new_dicts()
+    coarse_id, id_coarse, fine_id_coarse_id, fine_id_sub_id = new_dicts()
+    for fine_id, sub_id in fine_id_sub_id.items():
+        fine_label = fine_labels[fine_id]
+        coarse_id = fine_id_coarse_id[fine_id]
+        coarse_name = id_coarse[coarse_id]
+        fine_label_map = mapping_coarse_fine[coarse_name][sub_id]
+        print(f'the name is consistent {fine_label == fine_label_map}: {fine_label} == {fine_label_map}')
