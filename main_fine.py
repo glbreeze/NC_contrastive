@@ -66,8 +66,8 @@ def main_worker(args):
     _ = print_model_param_nums(model=model)
 
     # ================= Data loading code
-    train_dataset, val_dataset = get_dataset_balanced(args, train_coarse=False, val_coarse=False)
-    train_dataset_base, _ = get_dataset_balanced(args, train_aug='null', train_coarse=False, val_coarse=False)
+    train_dataset, val_dataset = get_dataset_balanced(args, train_coarse=args.coarse=='c', val_coarse=args.coarse=='c')
+    train_dataset_base, _ = get_dataset_balanced(args, train_aug='null', train_coarse=args.coarse=='c', val_coarse=args.coarse=='c')
 
     train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True,
                                                num_workers=args.workers, persistent_workers=True, pin_memory=True,
@@ -93,8 +93,7 @@ if __name__ == '__main__':
     parser.add_argument('--dataset', type=str, default='cifar100', help="cifar10,cifar100,stl10")
     parser.add_argument('--root', type=str, default='../dataset/', help="dataset setting")
     parser.add_argument('--aug', default='null', help='data augmentation')  # null | pc (padded_random_crop)
-    parser.add_argument('--coarse', default='f', type=str,
-                        help='f:False, t:Test at coarse level, b: Both train and test')
+    parser.add_argument('--coarse', default='t', type=str, help='f:False, t:Test at coarse level, b: Both train and test')
     parser.add_argument('--imbalance_rate', type=float, default=1.0)
     parser.add_argument('--imbalance_type', type=str, default='null')  # null | step | exp
     parser.add_argument('--two_crop', action='store_true', default=False)
@@ -127,7 +126,7 @@ if __name__ == '__main__':
     # MLP settings (only when using mlp and res_adapt(in which case only width has effect))
     parser.add_argument('--width', type=int, default=512)
     parser.add_argument('--depth', type=int, default=4)
-    parser.add_argument('--bias', type=str, default='f')
+    parser.add_argument('--bias', type=str, default='t')
 
     # etc.
     parser.add_argument('--seed', default=3407, type=int, help='seed for initializing training. ')
@@ -145,12 +144,11 @@ if __name__ == '__main__':
     if args.dataset == 'cifar10' or args.dataset == 'fmnist':
         args.num_classes = 10
     elif args.dataset == 'cifar100':
-        if args.coarse == 'b':
-            args.num_classes = 20
-        elif args.coarse == 't':
-            args.num_classes = 20 + 5*20
-            args.num_coarse = 20
-            args.num_sub = 5
+        args.num_coarse, args.num_sub = 20, 5
+        if args.coarse == 'c':
+            args.num_classes = args.num_coarse
+        elif args.coarse == 'f':
+            args.num_classes = args.num_coarse + args.num_sub * args.num_coarse
 
     if args.batch_size < 64:
         args.lr = args.lr * (args.batch_size / 64)

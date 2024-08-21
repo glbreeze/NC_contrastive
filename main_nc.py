@@ -69,15 +69,8 @@ def main_worker(args):
     if args.imbalance_type == 'exp' or args.imbalance_type == 'step':
         train_dataset, val_dataset = get_dataset(args)
     else:
-        if args.coarse == 'b':  # both train and test
-            train_dataset, val_dataset = get_dataset_balanced(args, train_coarse=True, val_coarse=True)
-            train_dataset_base, _ = get_dataset_balanced(args, train_aug='null', train_coarse=True, val_coarse=True)
-        elif args.coarse == 't':  # train at fine-grain level and test at coarse level
-            train_dataset, val_dataset = get_dataset_balanced(args, train_coarse=False, val_coarse=True)
-            train_dataset_base, _ = get_dataset_balanced(args, train_aug='null', train_coarse=True, val_coarse=True)
-        else:
-            train_dataset, val_dataset = get_dataset_balanced(args, train_coarse=False, val_coarse=False)
-            train_dataset_base, _ = get_dataset_balanced(args, train_aug='null', train_coarse=False, val_coarse=False)
+        train_dataset, val_dataset = get_dataset_balanced(args, train_coarse=args.coarse[0]=='c', val_coarse=args.coarse[1]=='c')
+        train_dataset_base, _ = get_dataset_balanced(args, train_aug='null', train_coarse=args.coarse[0]=='c', val_coarse=args.coarse[1]=='c')
 
     train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True,
                                                num_workers=args.workers, persistent_workers=True, pin_memory=True, sampler=None)
@@ -100,7 +93,7 @@ if __name__ == '__main__':
     parser.add_argument('--dataset', type=str, default='cifar100', help="cifar10,cifar100,stl10")
     parser.add_argument('--root', type=str, default='../dataset/', help="dataset setting")
     parser.add_argument('--aug', default='null', help='data augmentation')  # null | pc (padded_random_crop)
-    parser.add_argument('--coarse', default='f', type=str, help='f:False, t:Test at coarse level, b: Both train and test')
+    parser.add_argument('--coarse', default='ff', type=str, help='f:False, t:Test at coarse level, b: Both train and test')
     parser.add_argument('--imbalance_rate', type=float, default=1.0)
     parser.add_argument('--imbalance_type', type=str, default='null')  # null | step | exp
     parser.add_argument('--two_crop', action='store_true', default=False)
@@ -143,7 +136,7 @@ if __name__ == '__main__':
     if args.dataset == 'cifar10' or args.dataset == 'fmnist':
         args.num_classes = 10
     elif args.dataset == 'cifar100':
-        if args.coarse == 'b':
+        if args.coarse[0] == 'c':
             args.num_classes = 20
         else:
             args.num_classes = 100

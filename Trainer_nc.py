@@ -47,7 +47,7 @@ class Trainer(object):
         self.log = log
 
     def set_scheduler(self,):
-        if self.args.scheduler == 'cos':
+        if self.args.scheduler in ['cos', 'cosine']:
             self.lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer, T_max=self.args.epochs)
         elif self.args.scheduler in ['ms', 'multi_step']:
             self.lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(self.optimizer, milestones=[70, 140], gamma=0.1)
@@ -62,13 +62,10 @@ class Trainer(object):
 
             inputs = inputs.to(self.device)
             targets = targets.to(self.device)
-            if self.args.aug == 'cm' or self.args.aug == 'cutmix':  # cutmix augmentation within the mini-batch
-                cutmix = v2.CutMix(num_classes=self.args.num_classes)
-                inputs, reweighted_targets = cutmix(inputs, targets)  # reweighted target will be [B, K]
 
             # ==== update loss and acc
             output, h = self.model(inputs, ret='of')
-            loss = self.criterion(output, reweighted_targets if self.args.aug in ['cm', 'cutmix'] else targets)
+            loss = self.criterion(output, targets)
             losses.update(loss.item(), targets.size(0))
             train_acc.update((output.argmax(dim=-1) == targets).float().mean().item(), targets.size(0))
 
@@ -116,17 +113,24 @@ class Trainer(object):
                 losses, train_acc = self.train_one_epoch()
             elif self.args.loss in ['scon', 'simc']:
                 losses = self.train_one_epoch_contrast()
-
-            self.log.info('====>EPOCH_{epoch}, Loss:{loss:.4f}'.format(epoch=epoch, loss=losses.avg))
             wandb.log({'train/train_loss': losses.avg,'train/lr': self.optimizer.param_groups[0]['lr']}, step=epoch)
-
+            
             # ========= evaluate on validation set =========
             if self.args.loss in ['scon', 'simc']:
                 self.set_classifier()
-
-            val_acc = self.validate(epoch=epoch)
-            wandb.log({'val/val_acc1': val_acc},step=epoch)
-
+                
+            train_acc = self.validate(loader=self.train_loader_base)
+            val_acc = self.validate(loader=self.val_loader, fine2coarse=self.args.coarse=='fc')
+            
+            if self.args.coarse[0] == 'f':
+                wandb.log({'train/acc_fine': train_acc,}, step=epoch)
+            elif self.args.coarse[0] == 'c': 
+                wandb.log({'train/acc_coarse': train_acc,}, step=epoch)
+            if self.args.coarse[1] == 'f':
+                wandb.log({'val/acc_fine': val_acc,}, step=epoch)
+            elif self.args.coarse[1] == 'c': 
+                wandb.log({'val/acc_coarse': val_acc,}, step=epoch)
+                 
             # ========= measure NC =========
             if (epoch + 1) % self.args.debug == 0 and self.args.debug > 0:
                 train_nc = analysis(self.model, self.train_loader_base, self.args)
@@ -161,8 +165,7 @@ class Trainer(object):
                     fig = plot_nc(train_nc)
                     wandb.log({"chart": fig}, step=epoch + 1)
 
-            if self.args.scheduler in ['step', 'ms', 'multi_step', 'poly']:
-                self.lr_scheduler.step()
+            self.lr_scheduler.step()
             self.model.train()
 
         self.log.info('Best Testing Prec@1: {:.3f}\n'.format(best_acc1))
@@ -177,13 +180,13 @@ class Trainer(object):
             self.classifier = LinearClassifier(feat_dim=self.model.encoder.feat_dim, num_classes=self.args.num_classes)
             self.update_linear_classifier()
 
-    def validate(self, epoch=None):
+    def validate(self, loader=None, fine2coarse=False):
         torch.cuda.empty_cache()
         self.model.eval()
         all_preds, all_targets, all_feats = [], [], []
 
         with torch.no_grad():
-            for i, (input, target) in enumerate(self.val_loader):
+            for i, (input, target) in enumerate(loader):
                 input = input.to(self.device)
                 target = target.to(self.device)
 
@@ -196,7 +199,7 @@ class Trainer(object):
                 all_preds.extend(pred.cpu().numpy())
                 all_targets.extend(target.cpu().numpy())
 
-        if self.args.coarse == 't':
+        if fine2coarse:
             vectorized_map = np.vectorize(fine_id_coarse_id.get)
             preds = vectorized_map(np.array(all_preds))
         else:
@@ -280,8 +283,8 @@ class Trainer(object):
                 inputs, labels = inputs.to(self.device), labels.to(self.device)
 
                 feats = self.model.encoder(inputs)
-                feats_all.append(feats.cpu().numpy())
-                labels_all.append(labels.cpu().numpy())
+                feats_all.append(feats)
+                labels_all.append(labels)
             feats = torch.cat(feats_all, dim=0)
             labels = torch.cat(labels_all, dim=0)
-        return feats, labels
+        return feats.cpu().numpy(), labels.cpu().numpy()

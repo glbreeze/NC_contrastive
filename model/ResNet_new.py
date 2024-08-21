@@ -310,7 +310,7 @@ class SupCEResNet(nn.Module):
         model_fun = model_dict[args.arch]
         self.encoder = model_fun(args=args)
         dim_in = self.encoder.feat_dim
-        self.fc = nn.Linear(dim_in, args.num_class, bias=args.bias)
+        self.fc = nn.Linear(dim_in, args.num_classes, bias=args.bias=='t')
 
     def forward(self, x, ret='o'):
         feat = self.encoder(x)
