@@ -56,7 +56,7 @@ def get_dataset_balanced(args, train_aug=None, train_coarse=False, val_coarse=Fa
     else:
         transform_train, transform_val = get_transform(args.dataset, train_aug)
 
-    if args.two_crop:
+    if args.two_crop and train_aug != 'null':
         transform_train = TwoCropTransform(transform_train)
 
     if args.dataset == 'cifar10':

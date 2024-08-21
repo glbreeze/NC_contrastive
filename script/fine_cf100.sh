@@ -10,8 +10,8 @@
 #SBATCH --partition=a100_1,a100_2,v100,rtx8000
 
 # job info
-Y=$1
-BS=$2
+BS=$1
+Y=$2
 
 
 # Singularity path
@@ -24,8 +24,7 @@ singularity exec --nv \
 --overlay /scratch/lg154/sseg/dataset/tiny-imagenet-200.sqf:ro \
 ${sif_path} /bin/bash -c "
 source /ext3/env.sh
-python main_nc.py --dataset cifar100 -a mresnet32 --epochs 200 --scheduler cosine \
-  --loss ce --coarse ${Y} --aug pc --batch_size ${BS} --lr 0.05 --debug -1 \
-  --seed 2021 --store_name cf100_mresnet32_ce_y${Y}_b${BS}
+python main_fine.py --dataset cifar100 -a mresnet32 --epochs 200 --scheduler cosine \
+  --loss ce --coarse ${Y} --aug pc --batch_size ${BS} --lr 0.05 --sub_wt 0.5 --debug -1 \
+  --seed 2021 --store_name cf100_mresnet32_Y${Y}_b${BS}
 "
-

@@ -121,7 +121,7 @@ if __name__ == '__main__':
     # MLP settings (only when using mlp and res_adapt(in which case only width has effect))
     parser.add_argument('--width', type=int, default=512)
     parser.add_argument('--depth', type=int, default=4)
-    parser.add_argument('--bias', type=str, default='f')
+    parser.add_argument('--bias', type=str, default='t')
 
     # etc.
     parser.add_argument('--seed', default=3407, type=int, help='seed for initializing training. ')

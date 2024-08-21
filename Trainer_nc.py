@@ -287,4 +287,4 @@ class Trainer(object):
                 labels_all.append(labels)
             feats = torch.cat(feats_all, dim=0)
             labels = torch.cat(labels_all, dim=0)
-        return feats.cpu().numpy(), labels.cpu().numpy()
+        return feats, labels
