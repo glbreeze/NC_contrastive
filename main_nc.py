@@ -106,6 +106,9 @@ if __name__ == '__main__':
     parser.add_argument('--eps', type=float, default=0.05)  # for ls loss
     parser.add_argument('--cls_type', type=str, default='ncc')
 
+    parser.add_argument('--cs_loss', action='store_true', default=False)
+    parser.add_argument('--cs_wt', type=float, default=0.5)
+
     parser.add_argument('--lr', '--learning-rate', default=0.05, type=float, metavar='LR', help='initial learning rate', dest='lr')
     parser.add_argument('--scheduler', type=str, default='ms')
     parser.add_argument('--lr_decay', type=float, default=0.5)
@@ -140,6 +143,7 @@ if __name__ == '__main__':
             args.num_classes = 20
         else:
             args.num_classes = 100
+            args.num_coarse = 20
     elif args.dataset == 'stl10':
         args.num_classes = 10
     elif args.dataset == 'ImageNet-LT':

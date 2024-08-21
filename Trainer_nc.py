@@ -42,9 +42,14 @@ class Trainer(object):
         elif self.args.loss == 'scon':
             self.criterion = SupConLoss(temperature=self.args.temp)
 
-        self.optimizer = torch.optim.SGD(self.model.parameters(), momentum=0.9, lr=args.lr, weight_decay=args.weight_decay)
+        if self.args.loss == 'ce' and self.args.coarse == 'fc' and self.args.cs_loss:
+            self.coarse_classifier = nn.Linear(self.model.encoder.feat_dim, self.args.num_coarse)
+            self.optimizer = torch.optim.SGD(list(self.model.parameters()) + list(self.coarse_classifier.parameters()),
+                                             momentum=0.9, lr=self.args.lr, weight_decay=self.args.weight_decay)
+        else:
+            self.optimizer = torch.optim.SGD(self.model.parameters(), momentum=0.9, lr=args.lr,
+                                             weight_decay=args.weight_decay)
         self.set_scheduler()
-        self.log = log
 
     def set_scheduler(self,):
         if self.args.scheduler in ['cos', 'cosine']:
@@ -58,16 +63,22 @@ class Trainer(object):
         losses = AverageMeter('Loss', ':.4e')
         train_acc = AverageMeter('Train_acc', ':.4e')
 
-        for i, (inputs, targets) in enumerate(self.train_loader):
+        for i, (inputs, labels) in enumerate(self.train_loader):
 
             inputs = inputs.to(self.device)
-            targets = targets.to(self.device)
+            labels = labels.to(self.device)
 
             # ==== update loss and acc
             output, h = self.model(inputs, ret='of')
-            loss = self.criterion(output, targets)
-            losses.update(loss.item(), targets.size(0))
-            train_acc.update((output.argmax(dim=-1) == targets).float().mean().item(), targets.size(0))
+            loss = self.criterion(output, labels)
+            losses.update(loss.item(), labels.size(0))
+            train_acc.update((output.argmax(dim=-1) == labels).float().mean().item(), labels.size(0))
+
+            if self.args.cs_loss and self.args.coarse=='fc':
+                output_cs = self.coarse_classifier(h)
+                vectorized_map = np.vectorize(fine_id_coarse_id.get)
+                coarse_labels = torch.from_numpy(vectorized_map(np.array(labels.cpu().numpy()))).to(self.device)
+                loss += self.criterion(output_cs, coarse_labels) * self.args.cs_wt
 
             # ==== gradient update
             self.optimizer.zero_grad()
@@ -95,6 +106,11 @@ class Trainer(object):
                 loss = self.criterion(features)
             losses.update(loss.item(), bsz)
 
+            if self.args.cs_loss:
+                vectorized_map = np.vectorize(fine_id_coarse_id.get)
+                coarse_labels = torch.from_numpy(vectorized_map(np.array(labels.cpu().numpy()))).to(self.device)
+                loss += self.criterion(features, coarse_labels) * self.args.cs_wt
+
             # ==== gradient update
             self.optimizer.zero_grad()
             loss.backward()
@@ -119,17 +135,20 @@ class Trainer(object):
             if self.args.loss in ['scon', 'simc']:
                 self.set_classifier()
                 
-            train_acc = self.validate(loader=self.train_loader_base)
-            val_acc = self.validate(loader=self.val_loader, fine2coarse=self.args.coarse=='fc')
+            train_acc_dt = self.validate(loader=self.train_loader_base)
+            val_acc_dt = self.validate(loader=self.val_loader, fine2coarse=self.args.coarse=='fc')
             
             if self.args.coarse[0] == 'f':
-                wandb.log({'train/acc_fine': train_acc,}, step=epoch)
+                wandb.log({'train/acc_fine': train_acc_dt['acc'],}, step=epoch)
             elif self.args.coarse[0] == 'c': 
-                wandb.log({'train/acc_coarse': train_acc,}, step=epoch)
+                wandb.log({'train/acc_coarse': train_acc_dt['acc'],}, step=epoch)
             if self.args.coarse[1] == 'f':
-                wandb.log({'val/acc_fine': val_acc,}, step=epoch)
+                wandb.log({'val/acc_fine': val_acc_dt['acc'],}, step=epoch)
             elif self.args.coarse[1] == 'c': 
-                wandb.log({'val/acc_coarse': val_acc,}, step=epoch)
+                wandb.log({'val/acc_coarse': val_acc_dt['acc'],}, step=epoch)
+
+            if self.args.coarse == 'fc' and self.args.cs_loss:
+                wandb.log({'train/acc_coarse_cs': train_acc_dt['acc_cs'], 'val/acc_coarse_cs': val_acc_dt['acc_cs']}, step=epoch)
                  
             # ========= measure NC =========
             if (epoch + 1) % self.args.debug == 0 and self.args.debug > 0:
@@ -183,31 +202,40 @@ class Trainer(object):
     def validate(self, loader=None, fine2coarse=False):
         torch.cuda.empty_cache()
         self.model.eval()
-        all_preds, all_targets, all_feats = [], [], []
+        all_preds, all_labels, all_preds_cs = [], [], []
 
         with torch.no_grad():
-            for i, (input, target) in enumerate(loader):
+            for i, (input, label) in enumerate(loader):
                 input = input.to(self.device)
-                target = target.to(self.device)
+                label = label.to(self.device)
 
                 if self.args.loss in ['ce']:
-                    output = self.model(input, ret='o')
+                    output, feat = self.model(input, ret='of')
                 elif self.args.loss in ['scon', 'simc'] and self.args.cls_type == 'ncc':
                     output = self.classifier(self.model.encoder(input))
-                _, pred = torch.max(output, 1)
 
-                all_preds.extend(pred.cpu().numpy())
-                all_targets.extend(target.cpu().numpy())
+                if self.args.cs_loss and self.loss == 'ce':
+                    output_cs = self.coarse_classifier(feat)
+                    all_preds_cs.append(output_cs.argmax(dim=-1))
+                all_preds.append(output.argmax(dim=-1))
+                all_labels.append(label)
+
+            all_preds = torch.cat(all_preds, dim=0)
+            all_labels = torch.cat(all_labels, dim=0)
 
         if fine2coarse:
             vectorized_map = np.vectorize(fine_id_coarse_id.get)
-            preds = vectorized_map(np.array(all_preds))
-        else:
-            preds = np.array(all_preds)
-        targets = np.array(all_targets)
+            all_preds = torch.from_numpy(vectorized_map(all_preds.cpu().numpy())).to(self.device)
+        acc = (all_preds == all_labels).float().mean().item()
 
-        acc = np.sum(preds == targets)/len(targets)
-        return acc
+        if self.args.cs_loss and self.args.coarse == 'fc' and self.loss == 'ce':
+            all_preds_cs = torch.cat(all_preds_cs, dim=0)
+            acc_cs = (all_preds_cs == all_labels).float().mean().item()
+            acc_dt = {'acc': acc, 'acc_cs': acc_cs}
+        else:
+            acc_dt = {'acc': acc}
+
+        return acc_dt
 
     def update_linear_classifier(self, epochs=1):
         self.model.eval()
