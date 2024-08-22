@@ -43,7 +43,7 @@ class Trainer(object):
             self.criterion = SupConLoss(temperature=self.args.temp)
 
         if self.args.loss == 'ce' and self.args.coarse == 'fc' and self.args.cs_loss:
-            self.coarse_classifier = nn.Linear(self.model.encoder.feat_dim, self.args.num_coarse)
+            self.coarse_classifier = nn.Linear(self.model.encoder.feat_dim, self.args.num_coarse).to(self.device)
             self.optimizer = torch.optim.SGD(list(self.model.parameters()) + list(self.coarse_classifier.parameters()),
                                              momentum=0.9, lr=self.args.lr, weight_decay=self.args.weight_decay)
         else:
@@ -214,7 +214,7 @@ class Trainer(object):
                 elif self.args.loss in ['scon', 'simc'] and self.args.cls_type == 'ncc':
                     output = self.classifier(self.model.encoder(input))
 
-                if self.args.cs_loss and self.loss == 'ce':
+                if self.args.cs_loss and self.args.loss == 'ce':
                     output_cs = self.coarse_classifier(feat)
                     all_preds_cs.append(output_cs.argmax(dim=-1))
                 all_preds.append(output.argmax(dim=-1))
@@ -228,7 +228,7 @@ class Trainer(object):
             all_preds = torch.from_numpy(vectorized_map(all_preds.cpu().numpy())).to(self.device)
         acc = (all_preds == all_labels).float().mean().item()
 
-        if self.args.cs_loss and self.args.coarse == 'fc' and self.loss == 'ce':
+        if self.args.cs_loss and self.args.coarse == 'fc' and self.args.loss == 'ce':
             all_preds_cs = torch.cat(all_preds_cs, dim=0)
             acc_cs = (all_preds_cs == all_labels).float().mean().item()
             acc_dt = {'acc': acc, 'acc_cs': acc_cs}
