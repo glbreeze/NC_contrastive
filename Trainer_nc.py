@@ -1,11 +1,11 @@
 from imbalance_data.cifar100_coarse2fine import fine_id_coarse_id
 import wandb
 import torch.nn as nn
-from torchvision.transforms import v2
+from sklearn.metrics import confusion_matrix
 
 from utils.util import *
 from utils.plot import plot_nc
-from utils.measure_nc import analysis
+from utils.measure_nc import analysis, analysis_feat
 from model.utils import get_centroids
 from model.classifier import NCC_Classifier, LinearClassifier
 from model.loss import CrossEntropyLabelSmooth, SupConLoss
@@ -27,6 +27,7 @@ def _get_polynomial_decay(lr, end_lr, decay_epochs, from_epoch=0, power=1.0):
 
 class Trainer(object):
     def __init__(self, args, model=None, train_loader=None, val_loader=None, train_loader_base=None, log=None):
+        self.log = log
         self.args = args
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -135,54 +136,41 @@ class Trainer(object):
             if self.args.loss in ['scon', 'simc']:
                 self.set_classifier()
                 
-            train_acc_dt = self.validate(loader=self.train_loader_base)
-            val_acc_dt = self.validate(loader=self.val_loader, fine2coarse=self.args.coarse=='fc')
+            train_dt = self.validate(loader=self.train_loader_base)
+            val_dt = self.validate(loader=self.val_loader, fine2coarse=self.args.coarse=='fc')
             
             if self.args.coarse[0] == 'f':
-                wandb.log({'train/acc_fine': train_acc_dt['acc'],}, step=epoch)
+                wandb.log({'train/acc_fine': train_dt['acc'],}, step=epoch)
             elif self.args.coarse[0] == 'c': 
-                wandb.log({'train/acc_coarse': train_acc_dt['acc'],}, step=epoch)
+                wandb.log({'train/acc_coarse': train_dt['acc'],}, step=epoch)
             if self.args.coarse[1] == 'f':
-                wandb.log({'val/acc_fine': val_acc_dt['acc'],}, step=epoch)
+                wandb.log({'val/acc_fine': val_dt['acc'],}, step=epoch)
             elif self.args.coarse[1] == 'c': 
-                wandb.log({'val/acc_coarse': val_acc_dt['acc'],}, step=epoch)
+                wandb.log({'val/acc_coarse': val_dt['acc'],}, step=epoch)
 
             if self.args.coarse == 'fc' and self.args.cs_loss:
-                wandb.log({'train/acc_coarse_cs': train_acc_dt['acc_cs'], 'val/acc_coarse_cs': val_acc_dt['acc_cs']}, step=epoch)
+                wandb.log({'train/acc_coarse_cs': train_dt['acc_cs'], 'val/acc_coarse_cs': val_dt['acc_cs']}, step=epoch)
                  
             # ========= measure NC =========
             if (epoch + 1) % self.args.debug == 0 and self.args.debug > 0:
-                train_nc = analysis(self.model, self.train_loader_base, self.args)
-                self.log.info('>>>>Epoch:{}, Train Loss:{:.3f}, Acc:{:.2f}, NC1:{:.3f}, NC3:{:.3f}'.format(
-                    epoch, train_nc['loss'], train_nc['acc'], train_nc['nc1'], train_nc['nc3']))
+                train_nc = analysis_feat(train_dt['labels'], train_dt['feats'], self.args)
+                val_nc = analysis_feat(val_dt['labels'], val_dt['feats'], self.args)
                 wandb.log({
                     'train_nc/nc1': train_nc['nc1'],
-                    'train_nc/nc2h': train_nc['nc2_h'],
-                    'train_nc/nc2w': train_nc['nc2_w'],
-                    'train_nc/nc3': train_nc['nc3'],
-                    'train_nc/nc3_d': train_nc['nc3_d'],
-                    'train_nc2/nc21_h': train_nc['nc21_h'],
-                    'train_nc2/nc22_h': train_nc['nc22_h'],
-                    'train_nc2/nc21_w': train_nc['nc21_w'],
-                    'train_nc2/nc22_w': train_nc['nc22_w'],
-                }, step=epoch)
-
-                test_nc = analysis(self.model, self.val_loader, self.args)
-                wandb.log({
-                    'test_nc/nc1': test_nc['nc1'],
-                    'test_nc/nc2h': test_nc['nc2_h'],
-                    'test_nc/nc2w': test_nc['nc2_w'],
-                    'test_nc/nc3': test_nc['nc3'],
-                    'test_nc/nc3_d': test_nc['nc3_d'],
-                    'test_nc2/nc21_h': test_nc['nc21_h'],
-                    'test_nc2/nc22_h': test_nc['nc22_h'],
-                    'test_nc2/nc21_w': test_nc['nc21_w'],
-                    'test_nc2/nc22_w': test_nc['nc22_w'],
+                    'train_nc/nc2h': train_nc['nc2h'],
+                    'train_nc/h_norm': train_nc['h_norm'],
+                    'val_nc/nc1': val_nc['nc1'],
+                    'val_nc/nc2h': val_nc['nc2h'],
+                    'val_nc/h_norm': val_nc['h_norm'],
                 }, step=epoch)
 
                 if (epoch + 1) % (self.args.debug * 5) == 0:
-                    fig = plot_nc(train_nc)
-                    wandb.log({"chart": fig}, step=epoch + 1)
+                    acc_cls = self.classwise_acc(val_dt['labels'].cpu().numpy(), val_dt['preds'].cpu().numpy())
+                    data = [[label, val_tr, val_va, acc] for (label, val_tr, val_va, acc) in zip(np.arange(self.args.num_classes), train_nc['nc1_cls'], val_nc['nc1_cls'], acc_cls)]
+                    table = wandb.Table(data=data, columns=["label", "nc1_train", 'nc1_val', 'acc'])
+                    wandb.log({"per class nc1 train": wandb.plot.bar(table, "label", "nc1_train", title="train nc1")})
+                    wandb.log({"per class nc1 val":   wandb.plot.bar(table, "label", "nc1_val", title="val nc1")})
+                    wandb.log({"per class acc val":   wandb.plot.bar(table, "label", "acc_val", title="val acc")})
 
             self.lr_scheduler.step()
             self.model.train()
@@ -202,7 +190,7 @@ class Trainer(object):
     def validate(self, loader=None, fine2coarse=False):
         torch.cuda.empty_cache()
         self.model.eval()
-        all_preds, all_labels, all_preds_cs = [], [], []
+        all_preds, all_labels, all_preds_cs, all_feats = [], [], [], []
 
         with torch.no_grad():
             for i, (input, label) in enumerate(loader):
@@ -212,16 +200,20 @@ class Trainer(object):
                 if self.args.loss in ['ce']:
                     output, feat = self.model(input, ret='of')
                 elif self.args.loss in ['scon', 'simc'] and self.args.cls_type == 'ncc':
-                    output = self.classifier(self.model.encoder(input))
+                    feat = self.model.encoder(input)
+                    output = self.classifier(feat)
 
                 if self.args.cs_loss and self.args.loss == 'ce':
                     output_cs = self.coarse_classifier(feat)
                     all_preds_cs.append(output_cs.argmax(dim=-1))
+
                 all_preds.append(output.argmax(dim=-1))
                 all_labels.append(label)
+                all_feats.append(feat)
 
             all_preds = torch.cat(all_preds, dim=0)
             all_labels = torch.cat(all_labels, dim=0)
+            all_feats = torch.cat(all_feats, dim=0)
 
         if fine2coarse:
             vectorized_map = np.vectorize(fine_id_coarse_id.get)
@@ -231,9 +223,9 @@ class Trainer(object):
         if self.args.cs_loss and self.args.coarse == 'fc' and self.args.loss == 'ce':
             all_preds_cs = torch.cat(all_preds_cs, dim=0)
             acc_cs = (all_preds_cs == all_labels).float().mean().item()
-            acc_dt = {'acc': acc, 'acc_cs': acc_cs}
+            acc_dt = {'acc': acc, 'acc_cs': acc_cs, 'feats': all_feats, 'labels': all_labels, 'preds': all_preds}
         else:
-            acc_dt = {'acc': acc}
+            acc_dt = {'acc': acc, 'feats': all_feats, 'labels': all_labels, 'preds': all_preds}
 
         return acc_dt
 
@@ -316,3 +308,11 @@ class Trainer(object):
             feats = torch.cat(feats_all, dim=0)
             labels = torch.cat(labels_all, dim=0)
         return feats, labels
+
+    def classwise_acc(self, targets, preds):
+        eps = np.finfo(np.float64).eps
+        cf = confusion_matrix(targets, preds).astype(float)
+        cls_cnt = cf.sum(axis=1)
+        cls_hit = np.diag(cf)
+        cls_acc = cls_hit / cls_cnt
+        return cls_acc
