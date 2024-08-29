@@ -10,54 +10,14 @@ from utils.randaugment import rand_augment_transform
 
 
 class Graph_Vars:
-    def __init__(self):
+    def __init__(self, dt):
         self.epoch = []
-        self.acc = []
-        self.loss = []
+        for key in dt.keys(): 
+            if key not in self.__dict__: 
+                self.__setattr__(key, [])
 
-        self.nc1 = []
-
-        self.nc2_h = []
-        self.nc2_w =[]
-        self.nc21_h = []
-        self.nc22_h = []
-        self.nc21_w = []
-        self.nc22_w = []
-        
-        self.nc1_cls = []
-        self.w_norm = []
-        self.h_norm = []
-        self.w_mnorm = []
-        self.h_mnorm = []
-        self.w_cos = []
-        self.w_cos_avg = []
-        self.h_cos = []
-        self.h_cos_avg = []
-        self.wh_cos = []
-
-        self.nc3 = []
-        self.nc3_d = []
-        
-        self.w_mnorm1 = []
-        self.w_mnorm2 = []
-        self.w_mnorm3 = []
-        self.h_mnorm1 = []
-        self.h_mnorm2 = []
-        self.h_mnorm3 = []
-        self.w_cos1 = []
-        self.w_cos2 = []
-        self.w_cos3 = []
-        self.h_cos1 = []
-        self.h_cos2 = []
-        self.h_cos3 = []
-  
-        self.lr = []
-        self.test_acc = []
-
-    def load_dt(self, nc_dt, epoch, lr=None):
+    def load_dt(self, nc_dt, epoch):
         self.epoch.append(epoch)
-        if lr:
-            self.lr.append(lr)
         for key in nc_dt:
             try:
                 self.__getattribute__(key).append(nc_dt[key])

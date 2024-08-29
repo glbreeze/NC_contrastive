@@ -52,7 +52,7 @@ class Trainer(object):
                                              weight_decay=args.weight_decay)
         self.set_scheduler()
 
-    def set_scheduler(self,):
+    def set_scheduler(self, ):
         if self.args.scheduler in ['cos', 'cosine']:
             self.lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer, T_max=self.args.epochs)
         elif self.args.scheduler in ['ms', 'multi_step']:
@@ -75,7 +75,7 @@ class Trainer(object):
             losses.update(loss.item(), labels.size(0))
             train_acc.update((output.argmax(dim=-1) == labels).float().mean().item(), labels.size(0))
 
-            if self.args.cs_loss and self.args.coarse=='fc':
+            if self.args.cs_loss and self.args.coarse == 'fc':
                 output_cs = self.coarse_classifier(h)
                 vectorized_map = np.vectorize(fine_id_coarse_id.get)
                 coarse_labels = torch.from_numpy(vectorized_map(np.array(labels.cpu().numpy()))).to(self.device)
@@ -93,7 +93,7 @@ class Trainer(object):
         losses = AverageMeter('Loss', ':.4e')
 
         for i, (inputs, labels) in enumerate(self.train_loader):
-            if isinstance(inputs,list): inputs = torch.cat([inputs[0], inputs[1]], dim=0)
+            if isinstance(inputs, list): inputs = torch.cat([inputs[0], inputs[1]], dim=0)
             inputs = inputs.to(self.device)
             labels = labels.to(self.device)
             bsz = labels.shape[0]
@@ -120,7 +120,6 @@ class Trainer(object):
         return losses
 
     def train_base(self):
-        best_acc1 = 0
 
         # tell wandb to watch what the model gets up to: gradients, weights, and more!
         wandb.watch(self.model, self.criterion, log="all", log_freq=20)
@@ -130,27 +129,28 @@ class Trainer(object):
                 losses, train_acc = self.train_one_epoch()
             elif self.args.loss in ['scon', 'simc']:
                 losses = self.train_one_epoch_contrast()
-            wandb.log({'train/train_loss': losses.avg,'train/lr': self.optimizer.param_groups[0]['lr']}, step=epoch)
-            
+            wandb.log({'train/train_loss': losses.avg, 'train/lr': self.optimizer.param_groups[0]['lr']}, step=epoch)
+
             # ========= evaluate on validation set =========
             if self.args.loss in ['scon', 'simc']:
                 self.set_classifier()
-                
+
             train_dt = self.validate(loader=self.train_loader_base)
-            val_dt = self.validate(loader=self.val_loader, fine2coarse=self.args.coarse=='fc')
-            
+            val_dt = self.validate(loader=self.val_loader, fine2coarse=self.args.coarse == 'fc')
+
             if self.args.coarse[0] == 'f':
-                wandb.log({'train/acc_fine': train_dt['acc'],}, step=epoch)
-            elif self.args.coarse[0] == 'c': 
-                wandb.log({'train/acc_coarse': train_dt['acc'],}, step=epoch)
+                wandb.log({'train/acc_fine': train_dt['acc'], }, step=epoch)
+            elif self.args.coarse[0] == 'c':
+                wandb.log({'train/acc_coarse': train_dt['acc'], }, step=epoch)
             if self.args.coarse[1] == 'f':
-                wandb.log({'val/acc_fine': val_dt['acc'],}, step=epoch)
-            elif self.args.coarse[1] == 'c': 
-                wandb.log({'val/acc_coarse': val_dt['acc'],}, step=epoch)
+                wandb.log({'val/acc_fine': val_dt['acc'], }, step=epoch)
+            elif self.args.coarse[1] == 'c':
+                wandb.log({'val/acc_coarse': val_dt['acc'], }, step=epoch)
 
             if self.args.coarse == 'fc' and self.args.cs_loss:
-                wandb.log({'train/acc_coarse_cs': train_dt['acc_cs'], 'val/acc_coarse_cs': val_dt['acc_cs']}, step=epoch)
-                 
+                wandb.log({'train/acc_coarse_cs': train_dt['acc_cs'], 'val/acc_coarse_cs': val_dt['acc_cs']},
+                          step=epoch)
+
             # ========= measure NC =========
             if (epoch + 1) % self.args.debug == 0 and self.args.debug > 0:
                 train_nc = analysis_feat(train_dt['labels'], train_dt['feats'], self.args)
@@ -166,16 +166,30 @@ class Trainer(object):
 
                 if (epoch + 1) % (self.args.debug * 5) == 0:
                     acc_cls = self.classwise_acc(val_dt['labels'].cpu().numpy(), val_dt['preds'].cpu().numpy())
-                    data = [[label, val_tr, val_va, acc] for (label, val_tr, val_va, acc) in zip(np.arange(self.args.num_classes), train_nc['nc1_cls'], val_nc['nc1_cls'], acc_cls)]
+                    data = [[label, val_tr, val_va, acc] for (label, val_tr, val_va, acc) in
+                            zip(np.arange(self.args.num_classes), train_nc['nc1_cls'], val_nc['nc1_cls'], acc_cls)]
                     table = wandb.Table(data=data, columns=["label", "nc1_train", 'nc1_val', 'acc'])
-                    wandb.log({"per class nc1 train": wandb.plot.bar(table, "label", "nc1_train", title="train nc1")})
-                    wandb.log({"per class nc1 val":   wandb.plot.bar(table, "label", "nc1_val", title="val nc1")})
-                    wandb.log({"per class acc val":   wandb.plot.bar(table, "label", "acc_val", title="val acc")})
+                    wandb.log({"per class nc1 train": wandb.plot.bar(table, "label", "nc1_train", title="train nc1")},
+                              step=epoch)
+                    wandb.log({"per class nc1 val": wandb.plot.bar(table, "label", "nc1_val", title="val nc1")},
+                              step=epoch)
+                    wandb.log({"per class acc val": wandb.plot.bar(table, "label", "acc", title="val acc")}, step=epoch)
+
+                try:
+                    train_nc_all.load_dt(train_nc)
+                    val_nc_all.load_dt(val_nc)
+                except:
+                    train_nc_all = Graph_Vars(train_nc)
+                    val_nc_all = Graph_Vars(val_nc)
+                    train_nc_all.load_dt(train_nc, epoch=epoch)
+                    val_nc_all.load_dt(val_nc, epoch=epoch)
 
             self.lr_scheduler.step()
             self.model.train()
 
-        self.log.info('Best Testing Prec@1: {:.3f}\n'.format(best_acc1))
+            if (epoch + 1 == self.args.epochs // 2) or (epoch + 1 == self.args.epochs):
+                with open(os.path.join(self.args.root_model + self.args.store_name, 'nc_dt.pkl'), 'wb') as f:
+                    pickle.dump([train_nc_all, val_nc_all], f)
 
     def set_classifier(self):
         if self.args.cls_type in ['ncc']:
@@ -233,13 +247,15 @@ class Trainer(object):
         self.model.eval()
         self.classifier.train()
         criterion = torch.nn.CrossEntropyLoss()
-        optimizer = torch.optim.SGD(self.classifier.parameters(), lr=self.args.lr, momentum=0.9, weight_decay=self.args.weight_decay)
+        optimizer = torch.optim.SGD(self.classifier.parameters(), lr=self.args.lr, momentum=0.9,
+                                    weight_decay=self.args.weight_decay)
 
         for epoch in range(epochs):
             losses, top1 = AverageMeter(), AverageMeter()
             for idx, (inputs, labels) in enumerate(self.train_loader):
                 if isinstance(inputs, list):
-                    inputs = torch.cat([inputs[0], inputs[1]], dim=0); labels = torch.cat([labels, labels], dim=0)
+                    inputs = torch.cat([inputs[0], inputs[1]], dim=0);
+                    labels = torch.cat([labels, labels], dim=0)
                 inputs = inputs.cuda(non_blocking=True)
                 labels = labels.cuda(non_blocking=True)
                 bsz = labels.shape[0]
@@ -252,7 +268,7 @@ class Trainer(object):
 
                 # update metric
                 losses.update(loss.item(), bsz)
-                acc = (output.argmax(dim=-1) == labels).sum().item()/len(labels)
+                acc = (output.argmax(dim=-1) == labels).sum().item() / len(labels)
                 top1.update(acc, bsz)
 
                 # SGD
@@ -290,10 +306,10 @@ class Trainer(object):
                 'l2ncs': l2n_centers,
                 'cl2ncs': cl2n_centers,
                 }
-        
+
     def extract_feat(self, data_loader):
         torch.cuda.empty_cache()
-        self.model.eval() 
+        self.model.eval()
         feats_all, labels_all = [], []
         with torch.set_grad_enabled(False):
             for i, (inputs, labels) in enumerate(data_loader):

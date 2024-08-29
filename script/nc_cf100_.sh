@@ -11,7 +11,7 @@
 
 # job info
 Y=$1
-BS=$2
+CS=$2
 
 
 # Singularity path
@@ -25,7 +25,8 @@ singularity exec --nv \
 ${sif_path} /bin/bash -c "
 source /ext3/env.sh
 python main_nc.py --dataset cifar100 -a mresnet32 --epochs 200 --scheduler cosine \
-  --loss ce --coarse ${Y} --aug pc --batch_size ${BS} --lr 0.05 --debug 2 \
-  --seed 2021 --store_name cf100_mresnet32_ce_y${Y}_b${BS}
+  --loss ce --coarse ${Y} --aug pc --batch_size 1024 --lr 0.05 --debug -1 \
+  --cs_loss --cs_wt ${CS} \
+  --seed 2021 --store_name cf100_mresnet32_ce_cs${CS}_Y${Y}_b1024
 "
 
