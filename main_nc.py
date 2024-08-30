@@ -41,7 +41,7 @@ def main(args):
     os.environ["WANDB_CACHE_DIR"] = "/scratch/lg154/sseg/.cache/wandb"
     os.environ["WANDB_CONFIG_DIR"] = "/scratch/lg154/sseg/.config/wandb"
     wandb.login(key='0c0abb4e8b5ce4ee1b1a4ef799edece5f15386ee')
-    wandb.init(project="NCC_"+str(args.dataset),
+    wandb.init(project="NC_cls",
                name= args.store_name.split('/')[-1]
                )
     wandb.config.update(args)
@@ -112,9 +112,7 @@ if __name__ == '__main__':
     parser.add_argument('--lr', '--learning-rate', default=0.05, type=float, metavar='LR', help='initial learning rate', dest='lr')
     parser.add_argument('--scheduler', type=str, default='ms')
     parser.add_argument('--lr_decay', type=float, default=0.5)
-    parser.add_argument('--end_lr', type=float, default=0.00001)  # poly LRD
-    parser.add_argument('--power', type=float, default=2.0)       # poly LRD
-    parser.add_argument('--decay_epochs', type=int, default=400)
+   
 
     parser.add_argument('--epochs', default=800, type=int, metavar='N', help='number of total epochs to run')
     parser.add_argument('-b', '--batch_size', default=64, type=int, metavar='N', help='mini-batch size')
@@ -133,7 +131,8 @@ if __name__ == '__main__':
     parser.add_argument('--start-epoch', default=0, type=int, metavar='N', help='manual epoch number (useful on restarts)')
     parser.add_argument('--root_model', type=str, default='./result/')
     parser.add_argument('--store_name', type=str, default='name')
-    parser.add_argument('--debug', type=int, default=10)
+    parser.add_argument('--nc_freq', type=int, default=5)
+    parser.add_argument('--log_freq', type=int, default=5)
     args = parser.parse_args()
 
     if args.dataset == 'cifar10' or args.dataset == 'fmnist':

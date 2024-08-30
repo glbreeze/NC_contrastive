@@ -56,7 +56,7 @@ class Trainer(object):
         if self.args.scheduler in ['cos', 'cosine']:
             self.lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer, T_max=self.args.epochs)
         elif self.args.scheduler in ['ms', 'multi_step']:
-            self.lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(self.optimizer, milestones=[70, 140], gamma=0.1)
+            self.lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(self.optimizer, milestones=[self.args.epochs//3, 2*(self.args.epochs//3)], gamma=0.1)
 
     def train_one_epoch(self):
         # switch to train mode
@@ -129,30 +129,32 @@ class Trainer(object):
                 losses, train_acc = self.train_one_epoch()
             elif self.args.loss in ['scon', 'simc']:
                 losses = self.train_one_epoch_contrast()
-            wandb.log({'train/train_loss': losses.avg, 'train/lr': self.optimizer.param_groups[0]['lr']}, step=epoch)
+            
+            if epoch == 0 or (epoch+1) % self.args.log_freq == 0:
+                wandb.log({'train/train_loss': losses.avg, 'train/lr': self.optimizer.param_groups[0]['lr']}, step=epoch)
 
-            # ========= evaluate on validation set =========
-            if self.args.loss in ['scon', 'simc']:
-                self.set_classifier()
+                # ========= evaluate on validation set =========
+                if self.args.loss in ['scon', 'simc']:
+                    self.set_classifier()
 
-            train_dt = self.validate(loader=self.train_loader_base)
-            val_dt = self.validate(loader=self.val_loader, fine2coarse=self.args.coarse == 'fc')
+                train_dt = self.validate(loader=self.train_loader_base)
+                val_dt = self.validate(loader=self.val_loader, fine2coarse=self.args.coarse == 'fc')
 
-            if self.args.coarse[0] == 'f':
-                wandb.log({'train/acc_fine': train_dt['acc'], }, step=epoch)
-            elif self.args.coarse[0] == 'c':
-                wandb.log({'train/acc_coarse': train_dt['acc'], }, step=epoch)
-            if self.args.coarse[1] == 'f':
-                wandb.log({'val/acc_fine': val_dt['acc'], }, step=epoch)
-            elif self.args.coarse[1] == 'c':
-                wandb.log({'val/acc_coarse': val_dt['acc'], }, step=epoch)
+                if self.args.coarse[0] == 'f':
+                    wandb.log({'train/acc_fine': train_dt['acc'], }, step=epoch)
+                elif self.args.coarse[0] == 'c':
+                    wandb.log({'train/acc_coarse': train_dt['acc'], }, step=epoch)
+                if self.args.coarse[1] == 'f':
+                    wandb.log({'val/acc_fine': val_dt['acc'], }, step=epoch)
+                elif self.args.coarse[1] == 'c':
+                    wandb.log({'val/acc_coarse': val_dt['acc'], }, step=epoch)
 
-            if self.args.coarse == 'fc' and self.args.cs_loss:
-                wandb.log({'train/acc_coarse_cs': train_dt['acc_cs'], 'val/acc_coarse_cs': val_dt['acc_cs']},
-                          step=epoch)
+                if self.args.coarse == 'fc' and self.args.cs_loss:
+                    wandb.log({'train/acc_coarse_cs': train_dt['acc_cs'], 'val/acc_coarse_cs': val_dt['acc_cs']},
+                            step=epoch)
 
             # ========= measure NC =========
-            if (epoch + 1) % self.args.debug == 0 and self.args.debug > 0:
+            if (epoch + 1) % self.args.nc_freq == 0 and self.args.nc_freq > 0:
                 train_nc = analysis_feat(train_dt['labels'], train_dt['feats'], self.args)
                 val_nc = analysis_feat(val_dt['labels'], val_dt['feats'], self.args)
                 wandb.log({
