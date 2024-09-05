@@ -155,8 +155,11 @@ class Trainer(object):
 
             # ========= measure NC =========
             if (epoch == 0 or (epoch + 1) % self.args.nc_freq == 0) and self.args.nc_freq > 0:
+                acc_cls = self.classwise_acc(val_dt['labels'].cpu().numpy(), val_dt['preds'].cpu().numpy())
+
                 train_nc = analysis_feat(train_dt['labels'], train_dt['feats'], self.args)
                 val_nc = analysis_feat(val_dt['labels'], val_dt['feats'], self.args)
+                val_nc['acc_cls'] = acc_cls
                 wandb.log({
                     'train_nc/nc1': train_nc['nc1'],
                     'train_nc/nc2h': train_nc['nc2h'],
@@ -166,14 +169,11 @@ class Trainer(object):
                     'val_nc/h_norm': val_nc['h_norm'],
                 }, step=epoch)
 
-                acc_cls = self.classwise_acc(val_dt['labels'].cpu().numpy(), val_dt['preds'].cpu().numpy())
-                data = [[label, val_tr, val_va, acc] for (label, val_tr, val_va, acc) in
+                data = [[label, nc1_tr, nc1_va, acc] for (label, nc1_tr, nc1_va, acc) in
                         zip(np.arange(self.args.num_classes), train_nc['nc1_cls'], val_nc['nc1_cls'], acc_cls)]
                 table = wandb.Table(data=data, columns=["label", "nc1_train", 'nc1_val', 'acc'])
-                wandb.log({"per class nc1 train": wandb.plot.bar(table, "label", "nc1_train", title="train nc1")},
-                            step=epoch)
-                wandb.log({"per class nc1 val": wandb.plot.bar(table, "label", "nc1_val", title="val nc1")},
-                            step=epoch)
+                wandb.log({"per class nc1 train": wandb.plot.bar(table, "label", "nc1_train", title="train nc1")}, step=epoch)
+                wandb.log({"per class nc1 val": wandb.plot.bar(table, "label", "nc1_val", title="val nc1")}, step=epoch)
                 wandb.log({"per class acc val": wandb.plot.bar(table, "label", "acc", title="val acc")}, step=epoch)
 
                 try:
