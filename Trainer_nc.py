@@ -177,8 +177,8 @@ class Trainer(object):
                 wandb.log({"per class acc val": wandb.plot.bar(table, "label", "acc", title="val acc")}, step=epoch)
 
                 try:
-                    train_nc_all.load_dt(train_nc)
-                    val_nc_all.load_dt(val_nc)
+                    train_nc_all.load_dt(train_nc, epoch=epoch)
+                    val_nc_all.load_dt(val_nc, epoch=epoch)
                 except:
                     train_nc_all = Graph_Vars(train_nc)
                     val_nc_all = Graph_Vars(val_nc)
