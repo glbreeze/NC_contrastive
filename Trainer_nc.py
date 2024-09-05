@@ -154,7 +154,7 @@ class Trainer(object):
                             step=epoch)
 
             # ========= measure NC =========
-            if (epoch + 1) % self.args.nc_freq == 0 and self.args.nc_freq > 0:
+            if (epoch == 0 or (epoch + 1) % self.args.nc_freq == 0) and self.args.nc_freq > 0:
                 train_nc = analysis_feat(train_dt['labels'], train_dt['feats'], self.args)
                 val_nc = analysis_feat(val_dt['labels'], val_dt['feats'], self.args)
                 wandb.log({
@@ -166,16 +166,15 @@ class Trainer(object):
                     'val_nc/h_norm': val_nc['h_norm'],
                 }, step=epoch)
 
-                if (epoch + 1) % (self.args.debug * 5) == 0:
-                    acc_cls = self.classwise_acc(val_dt['labels'].cpu().numpy(), val_dt['preds'].cpu().numpy())
-                    data = [[label, val_tr, val_va, acc] for (label, val_tr, val_va, acc) in
-                            zip(np.arange(self.args.num_classes), train_nc['nc1_cls'], val_nc['nc1_cls'], acc_cls)]
-                    table = wandb.Table(data=data, columns=["label", "nc1_train", 'nc1_val', 'acc'])
-                    wandb.log({"per class nc1 train": wandb.plot.bar(table, "label", "nc1_train", title="train nc1")},
-                              step=epoch)
-                    wandb.log({"per class nc1 val": wandb.plot.bar(table, "label", "nc1_val", title="val nc1")},
-                              step=epoch)
-                    wandb.log({"per class acc val": wandb.plot.bar(table, "label", "acc", title="val acc")}, step=epoch)
+                acc_cls = self.classwise_acc(val_dt['labels'].cpu().numpy(), val_dt['preds'].cpu().numpy())
+                data = [[label, val_tr, val_va, acc] for (label, val_tr, val_va, acc) in
+                        zip(np.arange(self.args.num_classes), train_nc['nc1_cls'], val_nc['nc1_cls'], acc_cls)]
+                table = wandb.Table(data=data, columns=["label", "nc1_train", 'nc1_val', 'acc'])
+                wandb.log({"per class nc1 train": wandb.plot.bar(table, "label", "nc1_train", title="train nc1")},
+                            step=epoch)
+                wandb.log({"per class nc1 val": wandb.plot.bar(table, "label", "nc1_val", title="val nc1")},
+                            step=epoch)
+                wandb.log({"per class acc val": wandb.plot.bar(table, "label", "acc", title="val acc")}, step=epoch)
 
                 try:
                     train_nc_all.load_dt(train_nc)
@@ -189,7 +188,7 @@ class Trainer(object):
             self.lr_scheduler.step()
             self.model.train()
 
-            if (epoch + 1 == self.args.epochs // 2) or (epoch + 1 == self.args.epochs):
+            if self.args.nc_freq > 0 and ((epoch + 1 == self.args.epochs // 2) or (epoch + 1 == self.args.epochs)):
                 with open(os.path.join(self.args.root_model + self.args.store_name, 'nc_dt.pkl'), 'wb') as f:
                     pickle.dump([train_nc_all, val_nc_all], f)
 
