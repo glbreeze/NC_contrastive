@@ -247,6 +247,7 @@ def analysis_feat(labels, feats, args, W=None):
     if W is not None:
         nc2w = compute_ETF(W, device)
         w_norm = torch.norm(W, dim=-1).mean().item()
+        nc2 = compute_W_H_relation(W, (M - mean_all.unsqueeze(0)).T, device)
 
         # =========== NC3 (all losses are equal paper)
         normalized_M = (M - mean_all.unsqueeze(0)) / torch.norm(M - mean_all.unsqueeze(0), 'fro')
@@ -262,6 +263,6 @@ def analysis_feat(labels, feats, args, W=None):
     }
 
     if W is not None:
-        nc_dt.update({'nc2w': nc2w, 'w_norm':w_norm, 'nc3d':nc3d})
+        nc_dt.update({'nc2w': nc2w, 'w_norm':w_norm, 'nc2':nc2, 'nc3d':nc3d})
 
     return nc_dt

@@ -96,3 +96,17 @@ def mixup_process(out, target, lam):
     out = out * lam + out[indices] * (1 - lam)
     target = target * lam + target[indices] * (1 - lam)
     return out, target
+
+
+def get_U(K=2, d=2, n=16):
+    """ K: num of Gaussian components
+        d: rank of U
+        n: dim of x
+    """
+    A = np.random.rand(n, n)
+    Q, R = np.linalg.qr(A)
+
+    U_dt = {}
+    for i in range(K):
+        U_dt[i] = Q[:, d*i: d*(i+1)]
+    return U_dt
