@@ -1,6 +1,7 @@
 import sys
 import time
 import wandb
+import pickle
 import logging
 import datetime
 import argparse
@@ -20,13 +21,15 @@ from mpl_toolkits.mplot3d import Axes3D
 from sklearn.model_selection import train_test_split
 
 config_dt = dict(
-n_samples = 200,  # Total number of samples
+n_samples = 300,  # Total number of samples
 n_features = 3,   # Number of features (dimensionality)
 n_cls = 3,        # Number of classes (Gaussian components)
 n_sub_cls = 3,
-cls_dist=[5, 8], sub_cls_dist=[2,4], sub_cls_std=1.5,
+cls_dist=[4, 7], sub_cls_dist=[2,4], sub_cls_std=1.5,
 random_state = 42
 )
+
+# cls_dist=[5, 8], sub_cls_dist=[2,4], sub_cls_std=1.5 
 
 # Merge config and argparse arguments
 def update_args_with_dict(args, config):
@@ -54,7 +57,7 @@ def train_one_epoch(model, criterion, optimizer, x, y):
     optimizer.step()
     train_acc = (output.argmax(dim=-1) == labels).float().mean().item()
 
-    return loss.item, train_acc
+    return loss.item(), train_acc
 
 
 def main(args):
@@ -64,16 +67,21 @@ def main(args):
         args.num_classes = args.n_cls * args.n_sub_cls
     elif args.coarse.startswith('c'):
         args.num_classes = args.n_cls
-    args.store_name = f'{args.dataset}_Y{args.coarse}_LR{args.lr}'
+    args.store_name = f'{args.dataset}3_Y{args.coarse}_LR{args.lr}'
     print(args)
 
     # ============ Generate data from a mixture of Gaussians ============
-    x, fine_y, coarse_y = make_blobs(
-        n_samples=args.n_samples, n_features=args.n_features,
-        n_cls=args.n_cls, n_sub_cls=args.n_sub_cls,
-        cls_dist=args.cls_dist, sub_cls_dist=args.sub_cls_dist, sub_cls_std=args.sub_cls_std,
-        center_box=(-10.0, 10.0), shuffle=False, random_state=None
-    )
+    # x, fine_y, coarse_y = make_blobs(
+    #     n_samples=args.n_samples, n_features=args.n_features,
+    #     n_cls=args.n_cls, n_sub_cls=args.n_sub_cls,
+    #     cls_dist=args.cls_dist, sub_cls_dist=args.sub_cls_dist, sub_cls_std=args.sub_cls_std,
+    #     center_box=(-10.0, 10.0), shuffle=False, random_state=None
+    # )
+    
+    # with open('gm_dt3.pkl', 'wb') as f: 
+    #     pickle.dump([x, fine_y, coarse_y], f)
+    with open('gm_dt3.pkl', 'rb') as f:
+        x, fine_y, coarse_y = pickle.load(f) 
 
     #  ============ plot the data ============
     markers = ['*', 'o', '+']
@@ -139,40 +147,41 @@ def main(args):
         loss, train_acc = train_one_epoch(model, criterion, optimizer, x_train, y_train)
         lr_scheduler.step()
 
-        model.eval()
-        with torch.no_grad():
-            outputs, feats = model(torch.from_numpy(x_train).float().to(device), ret='of')
-        train_nc = analysis_feat(y_train, feats, args, W=model.fc.weight.data)
+        if epoch == 0 or (epoch+1) % 5 == 0:
+            model.eval()
+            with torch.no_grad():
+                outputs, feats = model(torch.from_numpy(x_train).float().to(device), ret='of')
+            train_nc = analysis_feat(y_train, feats, args, W=model.fc.weight.data)
 
-        with torch.no_grad():
-            outputs, feats = model(torch.from_numpy(x_test).float().to(device), ret='of')
-        pred_test = outputs.argmax(dim=-1)
-        if args.coarse == 'fc':
-            pred_test = pred_test // args.n_cls
-        y_test = fy_test if args.coarse[1] == 'f' else cy_test
-        test_acc = np.sum(pred_test.cpu().numpy() == y_test)/len(y_test)
-        test_nc = analysis_feat(fy_test if args.coarse.startswith('f') else cy_test, feats, args)
+            with torch.no_grad():
+                outputs, feats = model(torch.from_numpy(x_test).float().to(device), ret='of')
+            pred_test = outputs.argmax(dim=-1)
+            if args.coarse == 'fc':
+                pred_test = pred_test // args.n_cls
+            y_test = fy_test if args.coarse[1] == 'f' else cy_test
+            test_acc = np.sum(pred_test.cpu().numpy() == y_test)/len(y_test)
+            test_nc = analysis_feat(fy_test if args.coarse.startswith('f') else cy_test, feats, args)
 
-        log_dt = {
-            'train/train_loss': loss,
-            'train/lr': optimizer.param_groups[0]['lr'],
+            log_dt = {
+                'train/train_loss': loss,
+                'train/lr': optimizer.param_groups[0]['lr'],
 
-            'train_nc/nc1': train_nc['nc1'],
-            'train_nc/nc2': train_nc['nc2'],
-            'train_nc/nc2h': train_nc['nc2h'],
-            'train_nc/nc2w': train_nc['nc2w'],
-            'train_nc/h_norm': train_nc['h_norm'],
-            'train_nc/w_norm': train_nc['w_norm'],
+                'train_nc/nc1': train_nc['nc1'],
+                'train_nc/nc2': train_nc['nc2'],
+                'train_nc/nc2h': train_nc['nc2h'],
+                'train_nc/nc2w': train_nc['nc2w'],
+                'train_nc/h_norm': train_nc['h_norm'],
+                'train_nc/w_norm': train_nc['w_norm'],
 
-            'val_nc/nc1': test_nc['nc1'],
-            'val_nc/nc2h': test_nc['nc2h'],
-        }
+                'val_nc/nc1': test_nc['nc1'],
+                'val_nc/nc2h': test_nc['nc2h'],
+            }
 
-        log_dt.update({'train/acc_fine': train_acc}) if args.coarse[0] == 'f' else log_dt.update({'train/acc_coarse': train_acc})
-        log_dt.update({'val/acc_fine': test_acc}) if args.coarse[1] == 'f' else log_dt.update({'val/acc_coarse': test_acc})
+            log_dt.update({'train/acc_fine': train_acc}) if args.coarse[0] == 'f' else log_dt.update({'train/acc_coarse': train_acc})
+            log_dt.update({'val/acc_fine': test_acc}) if args.coarse[1] == 'f' else log_dt.update({'val/acc_coarse': test_acc})
 
-        wandb.log(log_dt, step=epoch)
-        print(f"epoch:{epoch}, train loss:{loss:.4f}, train acc: {train_acc:.4f}, test acc: {test_acc:.4f}")
+            wandb.log(log_dt, step=epoch)
+            print(f"epoch:{epoch}, train loss:{loss:.4f}, train acc: {train_acc:.4f}, test acc: {test_acc:.4f}")
 
 
 if __name__ == '__main__':
@@ -182,7 +191,7 @@ if __name__ == '__main__':
     parser.add_argument('--dataset', default='gm', type=str)
 
     # model structure
-    parser.add_argument('-a', '--arch', metavar='ARCH', default='mlp10_10_10')
+    parser.add_argument('-a', '--arch', metavar='ARCH', default='mlp64_64_64')
     parser.add_argument('--num_classes', default=10, type=int, help='number of classes ')
 
     parser.add_argument('--loss', type=str, default='ce')  # ce|ls|ceh|hinge
@@ -192,7 +201,7 @@ if __name__ == '__main__':
     parser.add_argument('--scheduler', type=str, default='ms')
     parser.add_argument('--lr_decay', type=float, default=0.5)
 
-    parser.add_argument('--epochs', default=100, type=int, metavar='N', help='number of total epochs to run')
+    parser.add_argument('--epochs', default=500, type=int, metavar='N', help='number of total epochs to run')
     parser.add_argument('--momentum', default=0.9, type=float, metavar='M', help='momentum')
     parser.add_argument('--wd', '--weight_decay', default=5e-4, type=float, metavar='W', dest='weight_decay')
 
