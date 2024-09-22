@@ -156,11 +156,14 @@ class BottleNeck(nn.Module):
 # ======================== modified ResNet ========================
 class ResNet_modify(nn.Module):
 
-    def __init__(self, block, num_blocks, nf=64, args=None):
+    def __init__(self, block, num_blocks, nf=64, num_classes=None, args=None):
         super(ResNet_modify, self).__init__()
         self.in_planes = nf
         self.args = args
-        self.num_classes = args.num_classes
+        if num_classes is not None:
+            self.num_classes = num_classes
+        else:
+            self.num_classes = args.num_classes
 
         self.layer0 = nn.Sequential(nn.Conv2d(3, self.in_planes, kernel_size=3, stride=1, padding=1, bias=False),
                                     nn.BatchNorm2d(self.in_planes),
@@ -249,8 +252,8 @@ def resnet18(args=None):
     return ResNet(BasicBlock, [2, 2, 2, 2], args=args)
 
 
-def mresnet32(args=None):
-    return ResNet_modify(BasicBlock_s, [5, 5, 5], args=args)
+def mresnet32(args=None, num_classes=None):
+    return ResNet_modify(BasicBlock_s, [5, 5, 5], num_classes=num_classes, args=args)
 
 
 def resnet34(args=None):
