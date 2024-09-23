@@ -13,6 +13,7 @@
 # limitations under the License.
 import argparse
 import os
+import wandb
 import sys
 import datetime
 import time
@@ -115,6 +116,11 @@ def get_args_parser():
         help="""Scale range of the cropped image before resizing, relatively to the origin image.
         Used for small local view cropping of multi-crop.""")
 
+    # fine-tune
+    parser.add_argument('--num_classes', type=int, default=100)
+    parser.add_argument('--cls_lr', type=float, default=1e-3)
+    parser.add_argument('--cls_weight_decay', type=float, default=1e-4)
+
     # Misc
     parser.add_argument('--data_path', default='/path/to/imagenet/train/', type=str,
         help='Please specify path to the ImageNet training data.')
@@ -132,6 +138,14 @@ def train_dino(args):
     dino_utils.fix_random_seeds(args.seed)
     print("\n".join("%s: %s" % (k, str(v)) for k, v in sorted(dict(vars(args)).items())))
     cudnn.benchmark = True
+
+    os.environ["WANDB_API_KEY"] = "0c0abb4e8b5ce4ee1b1a4ef799edece5f15386ee"
+    os.environ["WANDB_MODE"] = "online"  # "dryrun"
+    os.environ["WANDB_CACHE_DIR"] = "/scratch/lg154/sseg/.cache/wandb"
+    os.environ["WANDB_CONFIG_DIR"] = "/scratch/lg154/sseg/.config/wandb"
+    wandb.login(key='0c0abb4e8b5ce4ee1b1a4ef799edece5f15386ee')
+    wandb.init(project="NC_cls", name="cf100_dino")
+    wandb.config.update(args)
 
     # ============ preparing data ... ============
     transform = DataAugmentationDINO(
@@ -261,6 +275,7 @@ def train_dino(args):
             train_loader, optimizer, lr_schedule, wd_schedule, momentum_schedule,
             epoch, fp16_scaler, args)
 
+        log_stats = {**{f'train_{k}': v for k, v in train_stats.items()}, 'epoch': epoch}
         # ============ writing logs ... ============
         save_dict = {
             'student': student.state_dict(),
@@ -276,15 +291,62 @@ def train_dino(args):
             dino_utils.save_on_master(save_dict, os.path.join(args.output_dir, 'checkpoint.pth'))
             dino_utils.save_on_master(save_dict, os.path.join(args.output_dir, f'checkpoint{epoch:04}.pth'))
             
-        if args.eval_freq > 0 and epoch % args.eval_freq == 0: 
-            train_classifier()
+        if args.eval_freq > 0 and epoch % args.eval_freq == 0:
+            classifer = nn.Linear(student.backbone.feat_dim, args.num_classes, bias=True)
+            classifer = classifer.cuda()
+            classifer = train_classifier(student.backbone, classifer, train_loader)
+            test_acc = evaluate_backbone(student.backbone, classifer, test_loader)
+            log_stats.update({'test_acc': test_acc})
+            wandb.log({'train_loss': train_stats['loss'],
+                       'lr': train_stats['lr'],
+                       'test_acc': test_acc,
+                       }, step=epoch)
 
-        log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},'epoch': epoch}
         with (Path(args.output_dir) / "log.txt").open("a") as f:
             f.write(json.dumps(log_stats) + "\n")
     total_time = time.time() - start_time
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))
     print('Training time {}'.format(total_time_str))
+
+
+def train_classifier(backbone, classifer, train_loader):
+    backbone.eval()
+    classifer.train()
+    criterion = nn.CrossEntropyLoss()
+    optimizer = torch.optim.SGD(classifer.parameters(), lr=args.cls_lr, momentum=0.9, weight_decay=args.cls_weight_decay)
+    for epoch in range(1):
+        for it, (images, labels) in enumerate(train_loader):
+            images = torch.cat(images, dim=0).cuda(non_blocking=True)
+            labels = torch.cat([labels]*len(images), dim=0).cuda(non_blocking=True)
+            with torch.no_grad():
+                feats = backbone(images)
+            logits = classifer(feats)
+            loss = criterion(logits, labels)
+            train_acc = (logits.argmax(dim=-1) == labels).float().mean().item()
+
+            # ==== gradient update
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            if it%10 == 0 :
+                print(f'----classifier acc{train_acc:.3f}')
+    return classifer
+
+
+def evaluate_backbone(backbone, classifer, test_loader):
+    backbone.eval()
+    classifer.eval()
+    all_labels, all_preds = [], []
+    for i, (images, labels) in enumerate(test_loader):
+        images, labels = images.cuda(non_blocking=True), labels.cuda(non_blocking=True)
+        with torch.no_grad():
+            logits = classifer(backbone(images))
+        all_preds.append(logits.argmax(dim=-1))
+        all_labels.append(labels)
+    all_labels = torch.cat(all_labels, dim=0)
+    all_preds = torch.cat(all_preds, dim=0)
+    acc = torch.sum(all_preds == all_labels).item()/len(all_labels)
+    return acc
 
 
 def train_one_epoch(student, teacher, dino_loss, data_loader,
