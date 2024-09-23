@@ -144,12 +144,12 @@ def train_dino(args):
         transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
     ])
     trainset = torchvision.datasets.CIFAR100(root='../dataset', train=True, download=True, transform=transform)
-    testset = torchvision.datasets.CIFAR100(root='../dataset', train=False, download=True, transform=test_transform, coarse=False)
+    testset = torchvision.datasets.CIFAR100(root='../dataset', train=False, download=True, transform=test_transform)
 
     train_loader = torch.utils.data.DataLoader(trainset, sampler=None, batch_size=args.batch_size_per_gpu, shuffle=True,
                                                num_workers=args.num_workers, pin_memory=True, drop_last=True)
     test_loader = torch.utils.data.DataLoader(testset, batch_size=args.batch_size_per_gpu, shuffle=False,
-                                              num_workers=args.workers, persistent_workers=True, pin_memory=True)
+                                              num_workers=args.num_workers, persistent_workers=True, pin_memory=True)
     print(f"Data loaded: there are {len(trainset)} images.")
 
     # ============ building student and teacher networks ... ============
@@ -255,7 +255,6 @@ def train_dino(args):
     start_time = time.time()
     print("Starting DINO training !")
     for epoch in range(start_epoch, args.epochs):
-        train_loader.sampler.set_epoch(epoch)
 
         # ============ training one epoch of DINO ... ============
         train_stats = train_one_epoch(student, teacher, dino_loss,
@@ -276,6 +275,9 @@ def train_dino(args):
         if args.saveckp_freq and epoch % args.saveckp_freq == 0:
             dino_utils.save_on_master(save_dict, os.path.join(args.output_dir, 'checkpoint.pth'))
             dino_utils.save_on_master(save_dict, os.path.join(args.output_dir, f'checkpoint{epoch:04}.pth'))
+            
+        if args.eval_freq > 0 and epoch % args.eval_freq == 0: 
+            train_classifier()
 
         log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},'epoch': epoch}
         with (Path(args.output_dir) / "log.txt").open("a") as f:
@@ -389,8 +391,7 @@ class DINOLoss(nn.Module):
         Update center used for teacher output.
         """
         batch_center = torch.sum(teacher_output, dim=0, keepdim=True)
-        dist.all_reduce(batch_center)
-        batch_center = batch_center / (len(teacher_output) * dist.get_world_size())
+        batch_center = batch_center / len(teacher_output)
 
         # ema update
         self.center = self.center * self.center_momentum + batch_center * (1 - self.center_momentum)
@@ -448,4 +449,5 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser('DINO', parents=[get_args_parser()])
     args = parser.parse_args()
     Path(args.output_dir).mkdir(parents=True, exist_ok=True)
+    print(args)
     train_dino(args)
