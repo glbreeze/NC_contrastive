@@ -296,11 +296,12 @@ def train_dino(args):
         if args.eval_freq > 0 and epoch % args.eval_freq == 0:
             classifer = nn.Linear(student.backbone.feat_dim, args.num_classes, bias=True)
             classifer = classifer.cuda()
-            classifer = train_classifier(student.backbone, classifer, train_loader, total_epochs=1 if epoch <= args.epochs/2 else 3)
+            classifer = train_classifier(student.backbone, classifer, train_loader, total_epochs=1 + (epoch // (args.epochs//3))*2 )
             test_acc = evaluate_backbone(student.backbone, classifer, test_loader)
             log_stats.update({'test_acc': test_acc})
             wandb.log({'train_loss': train_stats['loss'],
                        'lr': train_stats['lr'],
+                       'weight_decay': train_stats['wd'],
                        'test_acc': test_acc,
                        }, step=epoch)
 
@@ -318,7 +319,7 @@ def train_classifier(backbone, classifer, train_loader, total_epochs=1):
     optimizer = torch.optim.SGD(classifer.parameters(), lr=args.cls_lr, momentum=0.9, weight_decay=args.cls_weight_decay)
     for epoch in range(total_epochs):
         for it, (images, labels) in enumerate(train_loader):
-            prog =  (epoch * len(train_loader) + it) / (total_epochs * len(train_loader))
+            prog = (epoch * len(train_loader) + it) / (total_epochs * len(train_loader))
             optimizer.param_groups[0]['lr'] = args.cls_lr * 0.2**(prog//0.333) 
             
             labels = torch.cat([labels]*len(images), dim=0).cuda(non_blocking=True)

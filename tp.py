@@ -12,38 +12,29 @@ input = torch.concatenate((torch.normal(mean0, std, (1, 3)),
 ), dim=0)
 
 
-sum_ = torch.zeros((torch.unique(label).size(0), 3))   # [B, C, H, W], sum over Batch
-sum_ = torch.zeros((3, 3))   # [B, C, H, W], sum over Batch
-sum_.index_add_(dim=0, index=label, source=input)    # [K, C, H, W]
-cnt_ = torch.bincount(label)
-avg_feat = sum_/cnt_[:, None]        # [K, C, H, W]  class-wise mean feat
-            mean = avg_feat.mean(dim=(0, 2, 3), keepdim=True)  # channel mean (equal weight for all classes)
+n_samples=20;  # sample per sub-cls
+n_features=2  # int, default=2 The number of features for each sample.
+center_box=(-10.0, 10.0)  # generate cluster centers within box
+cls_dist=[5, 6]
+sub_cls_dist=[2,4]
+cls_std=2.0
+sub_cls_std=1.0
+n_cls=2
+n_sub_cls=2
+shuffle=True
+random_state=None
 
-matrix = np.array([[1.000999, 2], [3, 4]])
-
-# Flatten the matrix and print the values in one row
-flattened_matrix = matrix.flatten()
-print(' '.join(map(str, flattened_matrix)))
-
-K = 100
-S = 5
-Z = torch.concatenate((
-    torch.tensor([1.0]),
-    torch.tensor([-1/(K-1)] * (K-1))
-)).view(1, -1)
-
-S = 10
-torch.softmax(Z*S, dim=1)
-
+import math
 import numpy as np
+def get_vol(d, r):
+    vol = r**d * (np.pi)**(d/2) / math.gamma(d/2+1)
+    return vol
 
-# Sample numpy array and mapping dictionary
-my_array = np.array([1, 2, 3, 4, 5])
-mapping_dict = {1: 2, 2: 4, 3: 6, 4: 8, 5: 10}
+from matplotlib import pyplot as plt
+plt.plot(np.arange(1, 10), [get_vol(d, 1) for d in np.arange(1, 10)])
 
-# Create a vectorized mapping function
-vectorized_map = np.vectorize(mapping_dict.get)
+d = 10
+v = (get_vol(d, 1) - get_vol(d, 1-0.05))/get_vol(d, 1)
 
-# Map elements using the vectorized function
-mapped_array = vectorized_map(my_array)
-print(mapped_array)
+print(f'{d}: {v}')
+
