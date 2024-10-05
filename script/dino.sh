@@ -10,9 +10,6 @@
 #SBATCH --partition=a100_1,a100_2,v100,rtx8000
 
 # job info
-Y=$1
-ARCH=$2
-LR=$3
 
 
 
@@ -26,8 +23,6 @@ singularity exec --nv \
 --overlay /scratch/lg154/sseg/dataset/tiny-imagenet-200.sqf:ro \
 ${sif_path} /bin/bash -c "
 source /ext3/env.sh
-python main_nc.py --dataset cifar100 -a ${ARCH} --epochs 300 --scheduler ms \
-  --loss ce --coarse ${Y} --aug pc --batch_size 128 --lr ${LR} --nc_freq 10 \
-  --seed 2021 --store_name ${ARCH}_Y${Y}_Apc_LR${LR}
+python main_dino.py --arch mresnet32 
 "
 

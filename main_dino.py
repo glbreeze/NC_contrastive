@@ -45,7 +45,7 @@ def get_args_parser():
     parser = argparse.ArgumentParser('DINO', add_help=False)
 
     # Model parameters
-    parser.add_argument('--arch', default='vit_small', type=str)
+    parser.add_argument('--arch', default='mresnet32', type=str)
         # choices=['vit_tiny', 'vit_small', 'vit_base', 'xcit', 'deit_tiny', 'deit_small'] + torchvision_archs + torch.hub.list("facebookresearch/xcit:main")
     parser.add_argument('--patch_size', default=16, type=int, help="""Size in pixels
         of input square patches - default 16 (for 16x16 patches). Using smaller
@@ -117,14 +117,15 @@ def get_args_parser():
         Used for small local view cropping of multi-crop.""")
 
     # fine-tune
+    parser.add_argument('--eval_freq', type=int, default=1)
     parser.add_argument('--num_classes', type=int, default=100)
-    parser.add_argument('--cls_lr', type=float, default=1e-3)
+    parser.add_argument('--cls_lr', type=float, default=5e-2)
     parser.add_argument('--cls_weight_decay', type=float, default=1e-4)
 
     # Misc
     parser.add_argument('--data_path', default='/path/to/imagenet/train/', type=str,
         help='Please specify path to the ImageNet training data.')
-    parser.add_argument('--output_dir', default=".", type=str, help='Path to save logs and checkpoints.')
+    parser.add_argument('--output_dir', default="result/cf100_dino1", type=str, help='Path to save logs and checkpoints.')
     parser.add_argument('--saveckp_freq', default=20, type=int, help='Save checkpoint every x epochs.')
     parser.add_argument('--seed', default=0, type=int, help='Random seed.')
     parser.add_argument('--num_workers', default=2, type=int, help='Number of data loading workers per GPU.')
@@ -271,6 +272,7 @@ def train_dino(args):
     for epoch in range(start_epoch, args.epochs):
 
         # ============ training one epoch of DINO ... ============
+        student.train()
         train_stats = train_one_epoch(student, teacher, dino_loss,
             train_loader, optimizer, lr_schedule, wd_schedule, momentum_schedule,
             epoch, fp16_scaler, args)
@@ -290,11 +292,11 @@ def train_dino(args):
         if args.saveckp_freq and epoch % args.saveckp_freq == 0:
             dino_utils.save_on_master(save_dict, os.path.join(args.output_dir, 'checkpoint.pth'))
             dino_utils.save_on_master(save_dict, os.path.join(args.output_dir, f'checkpoint{epoch:04}.pth'))
-            
+                 
         if args.eval_freq > 0 and epoch % args.eval_freq == 0:
             classifer = nn.Linear(student.backbone.feat_dim, args.num_classes, bias=True)
             classifer = classifer.cuda()
-            classifer = train_classifier(student.backbone, classifer, train_loader)
+            classifer = train_classifier(student.backbone, classifer, train_loader, total_epochs=1 if epoch <= args.epochs/2 else 3)
             test_acc = evaluate_backbone(student.backbone, classifer, test_loader)
             log_stats.update({'test_acc': test_acc})
             wandb.log({'train_loss': train_stats['loss'],
@@ -309,15 +311,18 @@ def train_dino(args):
     print('Training time {}'.format(total_time_str))
 
 
-def train_classifier(backbone, classifer, train_loader):
+def train_classifier(backbone, classifer, train_loader, total_epochs=1):
     backbone.eval()
     classifer.train()
     criterion = nn.CrossEntropyLoss()
     optimizer = torch.optim.SGD(classifer.parameters(), lr=args.cls_lr, momentum=0.9, weight_decay=args.cls_weight_decay)
-    for epoch in range(1):
+    for epoch in range(total_epochs):
         for it, (images, labels) in enumerate(train_loader):
-            images = torch.cat(images, dim=0).cuda(non_blocking=True)
+            prog =  (epoch * len(train_loader) + it) / (total_epochs * len(train_loader))
+            optimizer.param_groups[0]['lr'] = args.cls_lr * 0.2**(prog//0.333) 
+            
             labels = torch.cat([labels]*len(images), dim=0).cuda(non_blocking=True)
+            images = torch.cat(images, dim=0).cuda(non_blocking=True)
             with torch.no_grad():
                 feats = backbone(images)
             logits = classifer(feats)
@@ -328,6 +333,8 @@ def train_classifier(backbone, classifer, train_loader):
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
+            
+            # ==== 
             if it%10 == 0 :
                 print(f'----classifier acc{train_acc:.3f}')
     return classifer

@@ -70,10 +70,11 @@ def main(args):
         args.num_classes = args.n_cls * args.n_sub_cls
     elif args.coarse.startswith('c'):
         args.num_classes = args.n_cls
-    args.store_name = f'{args.dataset}3_Y{args.coarse}_LR{args.lr}'
+    args.store_name = f'{args.dataset}1_Y{args.coarse}_LR{args.lr}'
     print(args)
 
     # ============ Generate data from a mixture of Gaussians ============
+    fname = 'gm_dt1.pkl'
     if args.new_data:
         x, fine_y, coarse_y = make_blobs(
             n_samples=args.n_samples, n_features=args.n_features,
@@ -82,11 +83,13 @@ def main(args):
             center_box=(-10.0, 10.0), shuffle=False, random_state=None
         )
 
-        with open('gm_dt3.pkl', 'wb') as f:
+        with open(fname, 'wb') as f:
             pickle.dump([x, fine_y, coarse_y], f)
+            print(f'--store data to {fname}')
     else:
-        with open('gm_dt3.pkl', 'rb') as f:
+        with open(fname, 'rb') as f:
             x, fine_y, coarse_y = pickle.load(f)
+            print(f'==load data from {fname}')
 
     #  ============ plot the data ============
     markers = ['*', 'o', '+']
@@ -109,20 +112,6 @@ def main(args):
                 ax.scatter(x_[fine_y_ == fn_cls_id, 0], x_[fine_y_ == fn_cls_id, 1], x_[fine_y_ == fn_cls_id, 2],
                            marker=markers[counter], c=colors[cs_cls_id])
 
-    # ============ split the data to train and test ============
-    x_train, x_test, fy_train, fy_test, cy_train, cy_test = train_test_split(x, fine_y, coarse_y, test_size=0.3,
-                                                                             stratify=fine_y, random_state=42)
-    y_train = fy_train if args.coarse.startswith('f') else cy_train
-    x_train = torch.tensor(x_train, dtype=torch.float32)
-    y_train = torch.tensor(y_train)
-
-    y_test = fy_test if args.coarse[1] == 'f' else cy_test
-    x_test = torch.tensor(x_test, dtype=torch.float32)
-    y_test = torch.tensor(y_test)
-
-    train_set = TensorDataset(x_train, y_train)
-    train_loader = DataLoader(train_set, batch_size=args.batch_size, shuffle=True)
-
     if args.seed is not None:
         random.seed(args.seed)
         np.random.seed(args.seed)
@@ -143,6 +132,20 @@ def main(args):
     wandb.config.update(args)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # ============ split the data to train and test ============
+    x_train, x_test, fy_train, fy_test, cy_train, cy_test = train_test_split(x, fine_y, coarse_y, test_size=0.3,
+                                                                             stratify=fine_y, random_state=42)
+    y_train = fy_train if args.coarse.startswith('f') else cy_train
+    x_train = torch.tensor(x_train, dtype=torch.float32)
+    y_train = torch.tensor(y_train)
+
+    y_test = fy_test if args.coarse[1] == 'f' else cy_test
+    x_test = torch.tensor(x_test, dtype=torch.float32)
+    y_test = torch.tensor(y_test)
+
+    train_set = TensorDataset(x_train, y_train)
+    train_loader = DataLoader(train_set, batch_size=args.batch_size, shuffle=True)
+    
     # ==================== create model
     model = MLP(in_dim=args.n_features, out_dim=args.num_classes, args=args, arch=args.arch)
     model = model.to(device)
@@ -159,13 +162,12 @@ def main(args):
     # ================= start training
     for epoch in range(args.epochs):
 
-        loss, train_acc = train_one_epoch(model, criterion, optimizer, train_loader)
-        lr_scheduler.step()
-
         if epoch == 0 or (epoch+1) % 5 == 0:
             model.eval()
             with torch.no_grad():
                 outputs, feats = model(x_train.to(device), ret='of')
+            pred_train = outputs.argmax(dim=-1)
+            train_acc = (pred_train == y_train.to(device)).float().mean()
             train_nc = analysis_feat(y_train, feats, args, W=model.fc.weight.data)
 
             with torch.no_grad():
@@ -177,7 +179,6 @@ def main(args):
             test_nc = analysis_feat(fy_test if args.coarse.startswith('f') else cy_test, feats, args)
 
             log_dt = {
-                'train/train_loss': loss,
                 'train/lr': optimizer.param_groups[0]['lr'],
 
                 'train_nc/nc1': train_nc['nc1'],
@@ -194,10 +195,15 @@ def main(args):
             log_dt.update({'train/acc_fine': train_acc}) if args.coarse[0] == 'f' else log_dt.update({'train/acc_coarse': train_acc})
             log_dt.update({'val/acc_fine': test_acc}) if args.coarse[1] == 'f' else log_dt.update({'val/acc_coarse': test_acc})
 
+        loss, train_acc = train_one_epoch(model, criterion, optimizer, train_loader)
+        lr_scheduler.step()
+        
+        if epoch == 0 or (epoch+1) % 5 == 0:
+            log_dt.update({'train/train_loss': loss})
             wandb.log(log_dt, step=epoch)
-            print(f"epoch:{epoch}, train loss:{loss:.4f}, train acc: {train_acc:.4f}, test acc: {test_acc:.4f}")
-
-
+            print(f"epoch:{epoch}, train loss:{loss:.4f}, train acc: {train_acc:.4f}")
+        
+        
 if __name__ == '__main__':
     # train set
     parser = argparse.ArgumentParser(description="Global and Local Mixture Consistency Cumulative Learning")
