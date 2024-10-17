@@ -1,22 +1,9 @@
-# Copyright (c) Facebook, Inc. and its affiliates.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+
 import argparse
 import os
 import wandb
 import sys
-import datetime
-import time
+import pickle
 import math
 import json
 import torchvision
@@ -48,13 +35,15 @@ def get_args_parser():
     parser.add_argument('--arch', default='mresnet32', type=str)
         # choices=['vit_tiny', 'vit_small', 'vit_base', 'xcit', 'deit_tiny', 'deit_small'] + torchvision_archs + torch.hub.list("facebookresearch/xcit:main")
     parser.add_argument('--patch_size', default=16, type=int, )
-    parser.add_argument('--out_dim', default=65536, type=int, help="""Dimensionality of the DINO head output. """)
+    parser.add_argument('--out_dim', default=512, type=int, help="""Dimensionality of the DINO head output. """)
     parser.add_argument('--norm_last_layer', default=True, type=dino_utils.bool_flag, help="""Whether or not to weight normalize """)
     parser.add_argument('--use_bn_in_head', default=False, type=dino_utils.bool_flag, help="Whether to use BN in projection head (Default: False)")
 
     # fine-tune
+    parser.add_argument('--batch_size_per_gpu', default=1024, type=int, help='Per-GPU batch-size : number of distinct images loaded on one GPU.')
     parser.add_argument('--eval_freq', type=int, default=5)
     parser.add_argument('--num_classes', type=int, default=100)
+    parser.add_argument('--cls_epochs', type=int, default=10)
     parser.add_argument('--cls_lr', type=float, default=5e-2)
     parser.add_argument('--cls_weight_decay', type=float, default=1e-4)
 
@@ -71,6 +60,7 @@ def test_dino(args):
     dino_utils.fix_random_seeds(args.seed)
     print("\n".join("%s: %s" % (k, str(v)) for k, v in sorted(dict(vars(args)).items())))
     cudnn.benchmark = True
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     os.environ["WANDB_API_KEY"] = "0c0abb4e8b5ce4ee1b1a4ef799edece5f15386ee"
     os.environ["WANDB_MODE"] = "online"  # "dryrun"
@@ -121,132 +111,45 @@ def test_dino(args):
 
     dino_head = DINOHead(embed_dim, args.out_dim, use_bn=args.use_bn_in_head, norm_last_layer=args.norm_last_layer,)
 
-    student, dino_head = student.cuda(), dino_head.cuda()
-    
-    print("Found checkpoint at {}".format(ckp_path))
-    checkpoint = torch.load(ckp_path, map_location="cpu")
+    student, dino_head = student.to(device), dino_head.to(device)
+    ckpt_path = os.path.join(args.output_dir, 'checkpoint.pth')
+    if os.path.exists(ckpt_path):
+        checkpoint = torch.load(ckpt_path, map_location="cpu")
+        state_dict = checkpoint['student']
+    else:
+        print("Can not find checkpoint at {}".format(ckpt_path))
+    student.load_state_dict({key.replace('backbone.', '') : v for key, v in state_dict.items() if 'backbone' in key})
+    dino_head.load_state_dict({key.replace('head.', '') : v for key, v in state_dict.items() if 'head' in key})
 
-    # key is what to look for in the checkpoint file
-    # value is the object to load
-    # example: {'state_dict': model}
-    for key, value in kwargs.items():
-        if key in checkpoint and value is not None:
-            try:
-                msg = value.load_state_dict(checkpoint[key], strict=False)
-                print("=> loaded '{}' from checkpoint '{}' with msg {}".format(key, ckp_path, msg))
-            except TypeError:
-                try:
-                    msg = value.load_state_dict(checkpoint[key])
-                    print("=> loaded '{}' from checkpoint: '{}'".format(key, ckp_path))
-                except ValueError:
-                    print("=> failed to load '{}' from checkpoint: '{}'".format(key, ckp_path))
-        else:
-            print("=> key '{}' not found in checkpoint: '{}'".format(key, ckp_path))
+    # ================= train classifier head  =================
+    classifer = nn.Linear(student.feat_dim, args.num_classes, bias=True)
+    classifer = classifer.to(device)
+    classifer = train_classifier(student, classifer, train_loader, total_epochs=args.cls_epochs)
+    # test_acc = evaluate_backbone(student.backbone, classifer, test_loader)
 
-    # re load variable important for the run
-    if run_variables is not None:
-        for var_name in run_variables:
-            if var_name in checkpoint:
-                run_variables[var_name] = checkpoint[var_name]
+    # ================= train data  =================
+    student.eval()
+    classifer.eval()
+    dino_head.eval()
+    all_feats, all_labels, logit_sp, logit_un = [], [], [], []
+    for it, (images, labels) in enumerate(train_loader):
+        images, labels = images.to(device, non_blocking=True), labels.to(device, non_blocking=True)
+        with torch.no_grad():
+            feats = student(images)
+            logit_sp_ = classifer(feats)
+            logit_un_ = dino_head(feats)
+        all_feats.append(feats)
+        all_labels.append(labels)
+        logit_sp.append(logit_sp_)
+        logit_un.append(logit_un_)
+    all_feats = torch.cat(all_feats, dim=0)
+    all_labels = torch.cat(all_labels)
+    logit_sp = torch.cat(logit_sp, dim=0)
+    logit_un = torch.cat(logit_un, dim=0)
 
-    
-    print(f"Student and Teacher are built: they are both {args.arch} network.")
-
-    # ============ preparing loss ... ============
-    dino_loss = DINOLoss(
-        args.out_dim,
-        args.local_crops_number + 2,  # total number of crops = 2 global crops + local_crops_number
-        args.warmup_teacher_temp,
-        args.teacher_temp,
-        args.warmup_teacher_temp_epochs,
-        args.epochs,
-    ).cuda()
-
-    # ============ preparing optimizer ... ============
-    params_groups = dino_utils.get_params_groups(student)
-    if args.optimizer == "adamw":
-        optimizer = torch.optim.AdamW(params_groups)  # to use with ViTs
-    elif args.optimizer == "sgd":
-        optimizer = torch.optim.SGD(params_groups, lr=0, momentum=0.9)  # lr is set by scheduler
-    elif args.optimizer == "lars":
-        optimizer = dino_utils.LARS(params_groups)  # to use with convnet and large batches
-    # for mixed precision training
-    fp16_scaler = None
-    if args.use_fp16:
-        fp16_scaler = torch.cuda.amp.GradScaler()
-
-    # ============ init schedulers ... ============
-    lr_schedule = dino_utils.cosine_scheduler(
-        args.lr * args.batch_size_per_gpu / 256.,  # linear scaling rule
-        args.min_lr,
-        args.epochs, len(train_loader),
-        warmup_epochs=args.warmup_epochs,
-    )
-    wd_schedule = dino_utils.cosine_scheduler(
-        args.weight_decay,
-        args.weight_decay_end,
-        args.epochs, len(train_loader),
-    )
-    # momentum parameter is increased to 1. during training with a cosine schedule
-    momentum_schedule = dino_utils.cosine_scheduler(args.momentum_teacher, 1, args.epochs, len(train_loader))
-    print(f"Loss, optimizer and schedulers ready.")
-
-    # ============ optionally resume training ... ============
-    to_restore = {"epoch": 0}
-    dino_utils.restart_from_checkpoint(
-        os.path.join(args.output_dir, "checkpoint.pth"),
-        run_variables=to_restore,
-        student=student,
-        teacher=teacher,
-        optimizer=optimizer,
-        fp16_scaler=fp16_scaler,
-        dino_loss=dino_loss,
-    )
-    start_epoch = to_restore["epoch"]
-
-    start_time = time.time()
-    print("Starting DINO training !")
-    for epoch in range(start_epoch, args.epochs):
-
-        # ============ training one epoch of DINO ... ============
-        student.train()
-        train_stats = train_one_epoch(student, teacher, dino_loss,
-            train_loader, optimizer, lr_schedule, wd_schedule, momentum_schedule,
-            epoch, fp16_scaler, args)
-
-        log_stats = {**{f'train_{k}': v for k, v in train_stats.items()}, 'epoch': epoch}
-        # ============ writing logs ... ============
-        save_dict = {
-            'student': student.state_dict(),
-            'teacher': teacher.state_dict(),
-            'optimizer': optimizer.state_dict(),
-            'epoch': epoch + 1,
-            'args': args,
-            'dino_loss': dino_loss.state_dict(),
-        }
-        if fp16_scaler is not None:
-            save_dict['fp16_scaler'] = fp16_scaler.state_dict()
-        if args.saveckp_freq and epoch % args.saveckp_freq == 0:
-            dino_utils.save_on_master(save_dict, os.path.join(args.output_dir, 'checkpoint.pth'))
-            dino_utils.save_on_master(save_dict, os.path.join(args.output_dir, f'checkpoint{epoch:04}.pth'))
-                 
-        if args.eval_freq > 0 and epoch % args.eval_freq == 0:
-            classifer = nn.Linear(student.backbone.feat_dim, args.num_classes, bias=True)
-            classifer = classifer.cuda()
-            classifer = train_classifier(student.backbone, classifer, train_loader, total_epochs=1 + (epoch // (args.epochs//3))*2 )
-            test_acc = evaluate_backbone(student.backbone, classifer, test_loader)
-            log_stats.update({'test_acc': test_acc})
-            wandb.log({'train_loss': train_stats['loss'],
-                       'lr': train_stats['lr'],
-                       'weight_decay': train_stats['wd'],
-                       'test_acc': test_acc,
-                       }, step=epoch)
-
-        with (Path(args.output_dir) / "log.txt").open("a") as f:
-            f.write(json.dumps(log_stats) + "\n")
-    total_time = time.time() - start_time
-    total_time_str = str(datetime.timedelta(seconds=int(total_time)))
-    print('Training time {}'.format(total_time_str))
+    with open(os.path.join(args.output_dir, 'analysis.pkl'), 'wb') as f:
+        pickle.dump([all_feats, all_labels, logit_sp, logit_un], f)
+    print(f'save the result to pickle file')
 
 
 def train_classifier(backbone, classifer, train_loader, total_epochs=1):
@@ -259,8 +162,7 @@ def train_classifier(backbone, classifer, train_loader, total_epochs=1):
             prog = (epoch * len(train_loader) + it) / (total_epochs * len(train_loader))
             optimizer.param_groups[0]['lr'] = args.cls_lr * 0.2**(prog//0.333) 
             
-            labels = torch.cat([labels]*len(images), dim=0).cuda(non_blocking=True)
-            images = torch.cat(images, dim=0).cuda(non_blocking=True)
+            images, labels = images.cuda(non_blocking=True), labels.cuda(non_blocking=True)
             with torch.no_grad():
                 feats = backbone(images)
             logits = classifer(feats)
@@ -272,9 +174,9 @@ def train_classifier(backbone, classifer, train_loader, total_epochs=1):
             loss.backward()
             optimizer.step()
             
-            # ==== 
+            # ==== print
             if it%10 == 0 :
-                print(f'----classifier acc{train_acc:.3f}')
+                print(f'----classifier acc:{train_acc:.3f}, lr:{optimizer.param_groups[0]["lr"]:.4f}')
     return classifer
 
 
@@ -454,7 +356,7 @@ class DataAugmentationDINO(object):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('DINO', parents=[get_args_parser()])
-    args = parser.parse_args()
+    args = parser.parse_args([])
     Path(args.output_dir).mkdir(parents=True, exist_ok=True)
     print(args)
-    train_dino(args)
+    test_dino(args)
