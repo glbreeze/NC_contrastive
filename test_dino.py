@@ -1,4 +1,3 @@
-
 import argparse
 import os
 import wandb
@@ -25,31 +24,36 @@ import vision_transformer as vits
 from vision_transformer import DINOHead
 
 torchvision_archs = sorted(name for name in torchvision_models.__dict__
-    if name.islower() and not name.startswith("__")
-    and callable(torchvision_models.__dict__[name]))
+                           if name.islower() and not name.startswith("__")
+                           and callable(torchvision_models.__dict__[name]))
+
 
 def get_args_parser():
     parser = argparse.ArgumentParser('DINO', add_help=False)
 
     # Model parameters
     parser.add_argument('--arch', default='mresnet32', type=str)
-        # choices=['vit_tiny', 'vit_small', 'vit_base', 'xcit', 'deit_tiny', 'deit_small'] + torchvision_archs + torch.hub.list("facebookresearch/xcit:main")
+    # choices=['vit_tiny', 'vit_small', 'vit_base', 'xcit', 'deit_tiny', 'deit_small'] + torchvision_archs + torch.hub.list("facebookresearch/xcit:main")
     parser.add_argument('--patch_size', default=16, type=int, )
     parser.add_argument('--out_dim', default=512, type=int, help="""Dimensionality of the DINO head output. """)
-    parser.add_argument('--norm_last_layer', default=True, type=dino_utils.bool_flag, help="""Whether or not to weight normalize """)
-    parser.add_argument('--use_bn_in_head', default=False, type=dino_utils.bool_flag, help="Whether to use BN in projection head (Default: False)")
+    parser.add_argument('--norm_last_layer', default=True, type=dino_utils.bool_flag,
+                        help="""Whether or not to weight normalize """)
+    parser.add_argument('--use_bn_in_head', default=False, type=dino_utils.bool_flag,
+                        help="Whether to use BN in projection head (Default: False)")
 
     # fine-tune
-    parser.add_argument('--batch_size_per_gpu', default=1024, type=int, help='Per-GPU batch-size : number of distinct images loaded on one GPU.')
+    parser.add_argument('--batch_size_per_gpu', default=1024, type=int,
+                        help='Per-GPU batch-size : number of distinct images loaded on one GPU.')
     parser.add_argument('--eval_freq', type=int, default=5)
     parser.add_argument('--num_classes', type=int, default=100)
-    parser.add_argument('--cls_epochs', type=int, default=10)
+    parser.add_argument('--cls_epochs', type=int, default=20)
     parser.add_argument('--cls_lr', type=float, default=5e-2)
     parser.add_argument('--cls_weight_decay', type=float, default=1e-4)
 
     # Misc
-    parser.add_argument('--data_path', default='/path/to/imagenet/train/', type=str,)
-    parser.add_argument('--output_dir', default="result/dino/cf100_cp1.5_dim512", type=str, help='Path to save logs and checkpoints.')
+    parser.add_argument('--data_path', default='/path/to/imagenet/train/', type=str, )
+    parser.add_argument('--output_dir', default="result/dino/cf100_cp1.5_dim512", type=str,
+                        help='Path to save logs and checkpoints.')
     parser.add_argument('--saveckp_freq', default=20, type=int, help='Save checkpoint every x epochs.')
     parser.add_argument('--seed', default=0, type=int, help='Random seed.')
     parser.add_argument('--num_workers', default=2, type=int, help='Number of data loading workers per GPU.')
@@ -109,7 +113,7 @@ def test_dino(args):
         print(f"Unknow architecture: {args.arch}")
     student.fc, student.head = nn.Identity(), nn.Identity()
 
-    dino_head = DINOHead(embed_dim, args.out_dim, use_bn=args.use_bn_in_head, norm_last_layer=args.norm_last_layer,)
+    dino_head = DINOHead(embed_dim, args.out_dim, use_bn=args.use_bn_in_head, norm_last_layer=args.norm_last_layer, )
 
     student, dino_head = student.to(device), dino_head.to(device)
     ckpt_path = os.path.join(args.output_dir, 'checkpoint.pth')
@@ -118,8 +122,8 @@ def test_dino(args):
         state_dict = checkpoint['student']
     else:
         print("Can not find checkpoint at {}".format(ckpt_path))
-    student.load_state_dict({key.replace('backbone.', '') : v for key, v in state_dict.items() if 'backbone' in key})
-    dino_head.load_state_dict({key.replace('head.', '') : v for key, v in state_dict.items() if 'head' in key})
+    student.load_state_dict({key.replace('backbone.', ''): v for key, v in state_dict.items() if 'backbone' in key})
+    dino_head.load_state_dict({key.replace('head.', ''): v for key, v in state_dict.items() if 'head' in key})
 
     # ================= train classifier head  =================
     classifer = nn.Linear(student.feat_dim, args.num_classes, bias=True)
@@ -142,10 +146,10 @@ def test_dino(args):
         all_labels.append(labels)
         logit_sp.append(logit_sp_)
         logit_un.append(logit_un_)
-    all_feats = torch.cat(all_feats, dim=0)
-    all_labels = torch.cat(all_labels)
-    logit_sp = torch.cat(logit_sp, dim=0)
-    logit_un = torch.cat(logit_un, dim=0)
+    all_feats = torch.cat(all_feats, dim=0).cpu().numpy()
+    all_labels = torch.cat(all_labels).cpu().numpy()
+    logit_sp = torch.cat(logit_sp, dim=0).cpu().numpy()
+    logit_un = torch.cat(logit_un, dim=0).cpu().numpy()
 
     with open(os.path.join(args.output_dir, 'analysis.pkl'), 'wb') as f:
         pickle.dump([all_feats, all_labels, logit_sp, logit_un], f)
@@ -156,17 +160,19 @@ def train_classifier(backbone, classifer, train_loader, total_epochs=1):
     backbone.eval()
     classifer.train()
     criterion = nn.CrossEntropyLoss()
-    optimizer = torch.optim.SGD(classifer.parameters(), lr=args.cls_lr, momentum=0.9, weight_decay=args.cls_weight_decay)
+    optimizer = torch.optim.SGD(classifer.parameters(), lr=args.cls_lr, momentum=0.9,
+                                weight_decay=args.cls_weight_decay)
     for epoch in range(total_epochs):
         for it, (images, labels) in enumerate(train_loader):
             prog = (epoch * len(train_loader) + it) / (total_epochs * len(train_loader))
-            optimizer.param_groups[0]['lr'] = args.cls_lr * 0.2**(prog//0.333)
+            optimizer.param_groups[0]['lr'] = args.cls_lr * 0.2 ** (prog // 0.333)
 
             if isinstance(images, list):
                 labels = torch.cat([labels] * len(images), dim=0).cuda(non_blocking=True)
                 images = torch.cat(images, dim=0).cuda(non_blocking=True)
             else:
                 images, labels = images.cuda(non_blocking=True), labels.cuda(non_blocking=True)
+
             with torch.no_grad():
                 feats = backbone(images)
             logits = classifer(feats)
@@ -177,9 +183,9 @@ def train_classifier(backbone, classifer, train_loader, total_epochs=1):
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
-            
+
             # ==== print
-            if it%10 == 0 :
+            if it % 10 == 0:
                 print(f'----classifier acc:{train_acc:.3f}, lr:{optimizer.param_groups[0]["lr"]:.4f}')
     return classifer
 
@@ -196,12 +202,12 @@ def evaluate_backbone(backbone, classifer, test_loader):
         all_labels.append(labels)
     all_labels = torch.cat(all_labels, dim=0)
     all_preds = torch.cat(all_preds, dim=0)
-    acc = torch.sum(all_preds == all_labels).item()/len(all_labels)
+    acc = torch.sum(all_preds == all_labels).item() / len(all_labels)
     return acc
 
 
 def train_one_epoch(student, teacher, dino_loss, data_loader,
-                    optimizer, lr_schedule, wd_schedule, momentum_schedule,epoch,
+                    optimizer, lr_schedule, wd_schedule, momentum_schedule, epoch,
                     fp16_scaler, args):
     metric_logger = dino_utils.MetricLogger(delimiter="  ")
     header = 'Epoch: [{}/{}]'.format(epoch, args.epochs)
