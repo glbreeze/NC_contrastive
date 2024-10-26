@@ -73,7 +73,7 @@ def test_dino(args):
     # ============ preparing data ... ============
     transform = transforms.Compose([
         transforms.ToTensor(),
-        transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
+        transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
     ])
     trainset = torchvision.datasets.CIFAR100(root='../dataset', train=True, download=True, transform=transform)
     testset = torchvision.datasets.CIFAR100(root='../dataset', train=False, download=True, transform=transform)
@@ -160,9 +160,13 @@ def train_classifier(backbone, classifer, train_loader, total_epochs=1):
     for epoch in range(total_epochs):
         for it, (images, labels) in enumerate(train_loader):
             prog = (epoch * len(train_loader) + it) / (total_epochs * len(train_loader))
-            optimizer.param_groups[0]['lr'] = args.cls_lr * 0.2**(prog//0.333) 
-            
-            images, labels = images.cuda(non_blocking=True), labels.cuda(non_blocking=True)
+            optimizer.param_groups[0]['lr'] = args.cls_lr * 0.2**(prog//0.333)
+
+            if isinstance(images, list):
+                labels = torch.cat([labels] * len(images), dim=0).cuda(non_blocking=True)
+                images = torch.cat(images, dim=0).cuda(non_blocking=True)
+            else:
+                images, labels = images.cuda(non_blocking=True), labels.cuda(non_blocking=True)
             with torch.no_grad():
                 feats = backbone(images)
             logits = classifer(feats)

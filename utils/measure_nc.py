@@ -207,16 +207,16 @@ def analysis(model, loader, args):
     }
 
 
-def analysis_feat(labels, feats, args, W=None):
+def analysis_feat(labels, feats, num_classes, W=None):
     # analysis without extracting features
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    num_cls = [0 for _ in range(args.num_classes)]  # within class sample size
-    mean_cls = [0 for _ in range(args.num_classes)]
-    cov_cls = [0 for _ in range(args.num_classes)]
+    num_cls = [0 for _ in range(num_classes)]  # within class sample size
+    mean_cls = [0 for _ in range(num_classes)]
+    cov_cls = [0 for _ in range(num_classes)]
 
     # ====== compute mean and var for each class
-    for c in range(args.num_classes):
+    for c in range(num_classes):
 
         feats_c = feats[labels == c]   # [N, 512]
 
@@ -231,7 +231,7 @@ def analysis_feat(labels, feats, args, W=None):
     M = torch.stack(mean_cls)        # [K, 512]
     mean_all = torch.mean(M, dim=0)  # [512]
 
-    Sigma_b = (M - mean_all.unsqueeze(0)).T @ (M - mean_all.unsqueeze(0)) / args.num_classes
+    Sigma_b = (M - mean_all.unsqueeze(0)).T @ (M - mean_all.unsqueeze(0)) / num_classes
     Sigma_w = torch.stack([cov * num for cov, num in zip(cov_cls, num_cls)]).sum(dim=0) / sum(num_cls)
     Sigma_t = (feats - mean_all.unsqueeze(0)).T @ (feats - mean_all.unsqueeze(0)) / len(feats)
 

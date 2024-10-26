@@ -22,6 +22,7 @@ import json
 import torchvision
 from pathlib import Path
 from model.ResNet_new import mresnet32
+from test_dino import train_classifier, evaluate_backbone
 
 import numpy as np
 from PIL import Image
@@ -47,6 +48,7 @@ def get_args_parser():
     # Model parameters
     parser.add_argument('--arch', default='mresnet32', type=str)
         # choices=['vit_tiny', 'vit_small', 'vit_base', 'xcit', 'deit_tiny', 'deit_small'] + torchvision_archs + torch.hub.list("facebookresearch/xcit:main")
+    parser.add_argument('--dataset', default='im100', type=str)
     parser.add_argument('--patch_size', default=16, type=int, help="""Size in pixels
         of input square patches - default 16 (for 16x16 patches). Using smaller
         values leads to better performance but requires more memory. Applies only
@@ -153,15 +155,31 @@ def train_dino(args):
         args.global_crops_scale,
         args.local_crops_scale,
         args.local_crops_number,
+        args.img_size
     )
     test_transform = transforms.Compose([
+        transforms.Resize((args.img_size, args.img_size)),
         transforms.ToTensor(),
-        transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
+        transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
     ])
-    trainset = torchvision.datasets.CIFAR100(root='../dataset', train=True, download=True, transform=transform)
-    testset = torchvision.datasets.CIFAR100(root='../dataset', train=False, download=True, transform=test_transform)
+    train_transform = transforms.Compose([
+        transforms.RandomResizedCrop(args.img_size, scale=(0.2, 1.0)),
+        transforms.ToTensor(),
+        transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
+    ])
+
+    if args.dataset == 'cifar100':
+        trainset = torchvision.datasets.CIFAR100(root='../dataset', train=True, download=True, transform=transform)
+        trainset_cls = torchvision.datasets.CIFAR100(root='../dataset', train=True, download=True, transform=train_transform)
+        testset = torchvision.datasets.CIFAR100(root='../dataset', train=False, download=True, transform=test_transform)
+    elif args.dataset == 'im100':
+        trainset = datasets.ImageFolder(os.path.join('../dataset/imagenet-100', 'train'), transform)
+        trainset_cls = datasets.ImageFolder(os.path.join('../dataset/imagenet-100', 'train'), train_transform)
+        testset = datasets.ImageFolder(os.path.join('../dataset/imagenet-100', 'val'), test_transform)
 
     train_loader = torch.utils.data.DataLoader(trainset, sampler=None, batch_size=args.batch_size_per_gpu, shuffle=True,
+                                               num_workers=args.num_workers, pin_memory=True, drop_last=True)
+    train_loader_cls = torch.utils.data.DataLoader(trainset_cls, sampler=None, batch_size=args.batch_size_per_gpu, shuffle=True,
                                                num_workers=args.num_workers, pin_memory=True, drop_last=True)
     test_loader = torch.utils.data.DataLoader(testset, batch_size=args.batch_size_per_gpu, shuffle=False,
                                               num_workers=args.num_workers, persistent_workers=True, pin_memory=True)
@@ -296,7 +314,7 @@ def train_dino(args):
         if args.eval_freq > 0 and epoch % args.eval_freq == 0:
             classifer = nn.Linear(student.backbone.feat_dim, args.num_classes, bias=True)
             classifer = classifer.cuda()
-            classifer = train_classifier(student.backbone, classifer, train_loader, total_epochs=1 + (epoch // (args.epochs//3))*2 )
+            classifer = train_classifier(student.backbone, classifer, train_loader_cls, total_epochs=1 + (epoch // (args.epochs//3))*2 )
             test_acc = evaluate_backbone(student.backbone, classifer, test_loader)
             log_stats.update({'test_acc': test_acc})
             wandb.log({'train_loss': train_stats['loss'],
@@ -310,51 +328,6 @@ def train_dino(args):
     total_time = time.time() - start_time
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))
     print('Training time {}'.format(total_time_str))
-
-
-def train_classifier(backbone, classifer, train_loader, total_epochs=1):
-    backbone.eval()
-    classifer.train()
-    criterion = nn.CrossEntropyLoss()
-    optimizer = torch.optim.SGD(classifer.parameters(), lr=args.cls_lr, momentum=0.9, weight_decay=args.cls_weight_decay)
-    for epoch in range(total_epochs):
-        for it, (images, labels) in enumerate(train_loader):
-            prog = (epoch * len(train_loader) + it) / (total_epochs * len(train_loader))
-            optimizer.param_groups[0]['lr'] = args.cls_lr * 0.2**(prog//0.333) 
-            
-            labels = torch.cat([labels]*len(images), dim=0).cuda(non_blocking=True)
-            images = torch.cat(images, dim=0).cuda(non_blocking=True)
-            with torch.no_grad():
-                feats = backbone(images)
-            logits = classifer(feats)
-            loss = criterion(logits, labels)
-            train_acc = (logits.argmax(dim=-1) == labels).float().mean().item()
-
-            # ==== gradient update
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-            
-            # ==== 
-            if it%10 == 0 :
-                print(f'----classifier acc{train_acc:.3f}')
-    return classifer
-
-
-def evaluate_backbone(backbone, classifer, test_loader):
-    backbone.eval()
-    classifer.eval()
-    all_labels, all_preds = [], []
-    for i, (images, labels) in enumerate(test_loader):
-        images, labels = images.cuda(non_blocking=True), labels.cuda(non_blocking=True)
-        with torch.no_grad():
-            logits = classifer(backbone(images))
-        all_preds.append(logits.argmax(dim=-1))
-        all_labels.append(labels)
-    all_labels = torch.cat(all_labels, dim=0)
-    all_preds = torch.cat(all_preds, dim=0)
-    acc = torch.sum(all_preds == all_labels).item()/len(all_labels)
-    return acc
 
 
 def train_one_epoch(student, teacher, dino_loss, data_loader,
@@ -468,7 +441,7 @@ class DINOLoss(nn.Module):
 
 
 class DataAugmentationDINO(object):
-    def __init__(self, global_crops_scale, local_crops_scale, local_crops_number):
+    def __init__(self, global_crops_scale, local_crops_scale, local_crops_number, img_size):
         flip_and_color_jitter = transforms.Compose([
             transforms.RandomHorizontalFlip(p=0.5),
             transforms.RandomApply(
@@ -484,14 +457,14 @@ class DataAugmentationDINO(object):
 
         # first global crop
         self.global_transfo1 = transforms.Compose([
-            transforms.RandomResizedCrop(32, scale=global_crops_scale, interpolation=Image.BICUBIC),
+            transforms.RandomResizedCrop(img_size, scale=global_crops_scale, interpolation=Image.BICUBIC),
             flip_and_color_jitter,
             dino_utils.GaussianBlur(1.0),
             normalize,
         ])
         # second global crop
         self.global_transfo2 = transforms.Compose([
-            transforms.RandomResizedCrop(32, scale=global_crops_scale, interpolation=Image.BICUBIC),
+            transforms.RandomResizedCrop(img_size, scale=global_crops_scale, interpolation=Image.BICUBIC),
             flip_and_color_jitter,
             dino_utils.GaussianBlur(0.1),
             dino_utils.Solarization(0.2),
@@ -500,7 +473,7 @@ class DataAugmentationDINO(object):
         # transformation for the local small crops
         self.local_crops_number = local_crops_number
         self.local_transfo = transforms.Compose([
-            transforms.RandomResizedCrop(32, scale=local_crops_scale, interpolation=Image.BICUBIC),
+            transforms.RandomResizedCrop(img_size, scale=local_crops_scale, interpolation=Image.BICUBIC),
             flip_and_color_jitter,
             dino_utils.GaussianBlur(p=0.5),
             normalize,
@@ -518,6 +491,10 @@ class DataAugmentationDINO(object):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('DINO', parents=[get_args_parser()])
     args = parser.parse_args()
+    if args.dataset in ['cifar100']:
+        args.img_size = 32
+    elif args.dataset in ['im100']:
+        args.img_size = 224
     Path(args.output_dir).mkdir(parents=True, exist_ok=True)
     print(args)
     train_dino(args)
