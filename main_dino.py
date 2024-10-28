@@ -195,33 +195,33 @@ def train_dino(args):
             drop_path_rate=args.drop_path_rate,  # stochastic depth
         )
         teacher = vits.__dict__[args.arch](patch_size=args.patch_size)
-        embed_dim = student.embed_dim
+        args.embed_dim = student.embed_dim
     # if the network is a XCiT
     elif args.arch in torch.hub.list("facebookresearch/xcit:main"):
         student = torch.hub.load('facebookresearch/xcit:main', args.arch,
                                  pretrained=False, drop_path_rate=args.drop_path_rate)
         teacher = torch.hub.load('facebookresearch/xcit:main', args.arch, pretrained=False)
-        embed_dim = student.embed_dim
+        args.embed_dim = student.embed_dim
     # otherwise, we check if the architecture is in torchvision models
     elif args.arch in torchvision_models.__dict__.keys():
         student = torchvision_models.__dict__[args.arch]()
         teacher = torchvision_models.__dict__[args.arch]()
-        embed_dim = student.fc.weight.shape[1]
+        args.embed_dim = student.fc.weight.shape[1]
     elif args.arch == 'mresnet32':
         student = mresnet32(num_classes=100)
         teacher = mresnet32(num_classes=100)
-        embed_dim = student.feat_dim
+        args.embed_dim = student.feat_dim
     else:
         print(f"Unknow architecture: {args.arch}")
 
     # multi-crop wrapper handles forward with inputs of different resolutions
     student = dino_utils.MultiCropWrapper(
         student,
-        DINOHead(embed_dim, args.out_dim, use_bn=args.use_bn_in_head, norm_last_layer=args.norm_last_layer,)
+        DINOHead(args.embed_dim, args.out_dim, use_bn=args.use_bn_in_head, norm_last_layer=args.norm_last_layer,)
     )
     teacher = dino_utils.MultiCropWrapper(
         teacher,
-        DINOHead(embed_dim, args.out_dim, args.use_bn_in_head),
+        DINOHead(args.embed_dim, args.out_dim, args.use_bn_in_head),
     )
     student, teacher = student.cuda(), teacher.cuda()
     # synchronize batch norms (if any)
@@ -312,9 +312,9 @@ def train_dino(args):
             dino_utils.save_on_master(save_dict, os.path.join(args.output_dir, f'checkpoint{epoch:04}.pth'))
                  
         if args.eval_freq > 0 and epoch % args.eval_freq == 0:
-            classifer = nn.Linear(student.backbone.feat_dim, args.num_classes, bias=True)
+            classifer = nn.Linear(args.embed_dim, args.num_classes, bias=True)
             classifer = classifer.cuda()
-            classifer = train_classifier(student.backbone, classifer, train_loader_cls, total_epochs=1 + (epoch // (args.epochs//3))*2 )
+            classifer = train_classifier(student.backbone, classifer, train_loader_cls, total_epochs=1 + (epoch // (args.epochs//3))*2, args=args)
             test_acc = evaluate_backbone(student.backbone, classifer, test_loader)
             log_stats.update({'test_acc': test_acc})
             wandb.log({'train_loss': train_stats['loss'],
@@ -495,6 +495,7 @@ if __name__ == '__main__':
         args.img_size = 32
     elif args.dataset in ['im100']:
         args.img_size = 224
+    args.output_dir = os.path.join(f'result/dino/{args.dataset}', args.output_dir)
     Path(args.output_dir).mkdir(parents=True, exist_ok=True)
     print(args)
     train_dino(args)

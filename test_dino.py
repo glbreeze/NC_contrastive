@@ -128,7 +128,7 @@ def test_dino(args):
     # ================= train classifier head  =================
     classifer = nn.Linear(student.feat_dim, args.num_classes, bias=True)
     classifer = classifer.to(device)
-    classifer = train_classifier(student, classifer, train_loader, total_epochs=args.cls_epochs)
+    classifer = train_classifier(student, classifer, train_loader, total_epochs=args.cls_epochs, args=args)
     # test_acc = evaluate_backbone(student.backbone, classifer, test_loader)
 
     # ================= train data  =================
@@ -156,7 +156,7 @@ def test_dino(args):
     print(f'save the result to pickle file')
 
 
-def train_classifier(backbone, classifer, train_loader, total_epochs=1):
+def train_classifier(backbone, classifer, train_loader, total_epochs=1, args=None):
     backbone.eval()
     classifer.train()
     criterion = nn.CrossEntropyLoss()
@@ -185,8 +185,8 @@ def train_classifier(backbone, classifer, train_loader, total_epochs=1):
             optimizer.step()
 
             # ==== print
-            if it % 10 == 0:
-                print(f'----classifier acc:{train_acc:.3f}, lr:{optimizer.param_groups[0]["lr"]:.4f}')
+        
+        print(f'----classifier acc:{train_acc:.3f}, lr:{optimizer.param_groups[0]["lr"]:.4f}')
     return classifer
 
 
