@@ -56,23 +56,15 @@ def get_args_parser():
                         help='Path to save logs and checkpoints.')
     parser.add_argument('--saveckp_freq', default=20, type=int, help='Save checkpoint every x epochs.')
     parser.add_argument('--seed', default=0, type=int, help='Random seed.')
-    parser.add_argument('--num_workers', default=2, type=int, help='Number of data loading workers per GPU.')
+    parser.add_argument('--num_workers', default=0, type=int, help='Number of data loading workers per GPU.')
     return parser
 
 
-def test_dino(args):
+def test_dino(args, ckpt_file='checkpoint.pth', eval_cls=False):
     dino_utils.fix_random_seeds(args.seed)
     print("\n".join("%s: %s" % (k, str(v)) for k, v in sorted(dict(vars(args)).items())))
     cudnn.benchmark = True
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    os.environ["WANDB_API_KEY"] = "0c0abb4e8b5ce4ee1b1a4ef799edece5f15386ee"
-    os.environ["WANDB_MODE"] = "online"  # "dryrun"
-    os.environ["WANDB_CACHE_DIR"] = "/scratch/lg154/sseg/.cache/wandb"
-    os.environ["WANDB_CONFIG_DIR"] = "/scratch/lg154/sseg/.config/wandb"
-    wandb.login(key='0c0abb4e8b5ce4ee1b1a4ef799edece5f15386ee')
-    wandb.init(project="NC_cls", name=args.output_dir.split('/')[-1])
-    wandb.config.update(args)
 
     # ============ preparing data ... ============
     transform = transforms.Compose([
@@ -83,9 +75,9 @@ def test_dino(args):
     testset = torchvision.datasets.CIFAR100(root='../dataset', train=False, download=True, transform=transform)
 
     train_loader = torch.utils.data.DataLoader(trainset, sampler=None, batch_size=args.batch_size_per_gpu, shuffle=True,
-                                               num_workers=args.num_workers, pin_memory=True, drop_last=True)
+                                               num_workers=args.num_workers, drop_last=True)
     test_loader = torch.utils.data.DataLoader(testset, batch_size=args.batch_size_per_gpu, shuffle=False,
-                                              num_workers=args.num_workers, persistent_workers=True, pin_memory=True)
+                                              num_workers=args.num_workers)
     print(f"Data loaded: there are {len(trainset)} images.")
 
     # ============ building student and teacher networks ... ============
@@ -116,7 +108,7 @@ def test_dino(args):
     dino_head = DINOHead(embed_dim, args.out_dim, use_bn=args.use_bn_in_head, norm_last_layer=args.norm_last_layer, )
 
     student, dino_head = student.to(device), dino_head.to(device)
-    ckpt_path = os.path.join(args.output_dir, 'checkpoint.pth')
+    ckpt_path = os.path.join(args.output_dir, ckpt_file)
     if os.path.exists(ckpt_path):
         checkpoint = torch.load(ckpt_path, map_location="cpu")
         state_dict = checkpoint['student']
@@ -126,34 +118,44 @@ def test_dino(args):
     dino_head.load_state_dict({key.replace('head.', ''): v for key, v in state_dict.items() if 'head' in key})
 
     # ================= train classifier head  =================
-    classifer = nn.Linear(student.feat_dim, args.num_classes, bias=True)
-    classifer = classifer.to(device)
-    classifer = train_classifier(student, classifer, train_loader, total_epochs=args.cls_epochs, args=args)
+    if eval_cls:
+        classifer = nn.Linear(student.feat_dim, args.num_classes, bias=True)
+        classifer = classifer.to(device)
+        classifer = train_classifier(student, classifer, train_loader, total_epochs=args.cls_epochs, args=args)
     # test_acc = evaluate_backbone(student.backbone, classifer, test_loader)
 
     # ================= train data  =================
     student.eval()
-    classifer.eval()
+    if eval_cls:
+        classifer.eval()
     dino_head.eval()
     all_feats, all_labels, logit_sp, logit_un = [], [], [], []
     for it, (images, labels) in enumerate(train_loader):
         images, labels = images.to(device, non_blocking=True), labels.to(device, non_blocking=True)
         with torch.no_grad():
             feats = student(images)
-            logit_sp_ = classifer(feats)
             logit_un_ = dino_head(feats)
-        all_feats.append(feats)
-        all_labels.append(labels)
-        logit_sp.append(logit_sp_)
-        logit_un.append(logit_un_)
+
+            all_feats.append(feats)
+            all_labels.append(labels)
+            logit_un.append(logit_un_)
+
+            if eval_cls:
+                logit_sp_ = classifer(feats)
+                logit_sp.append(logit_sp_)
+
     all_feats = torch.cat(all_feats, dim=0).cpu().numpy()
     all_labels = torch.cat(all_labels).cpu().numpy()
-    logit_sp = torch.cat(logit_sp, dim=0).cpu().numpy()
     logit_un = torch.cat(logit_un, dim=0).cpu().numpy()
+    if eval_cls:
+        logit_sp = torch.cat(logit_sp, dim=0).cpu().numpy()
 
-    with open(os.path.join(args.output_dir, 'analysis.pkl'), 'wb') as f:
-        pickle.dump([all_feats, all_labels, logit_sp, logit_un], f)
-    print(f'save the result to pickle file')
+    if False:
+        with open(os.path.join(args.output_dir, 'analysis.pkl'), 'wb') as f:
+            pickle.dump([all_feats, all_labels, logit_sp, logit_un], f)
+        print(f'save the result to pickle file')
+
+    return all_feats, all_labels, logit_un
 
 
 def train_classifier(backbone, classifer, train_loader, total_epochs=1, args=None):
